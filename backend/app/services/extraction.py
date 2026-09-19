@@ -202,22 +202,51 @@ def class_date_key(name: str) -> re.Match | None:
     return CLASS_DATE_KEY.fullmatch(name.removeprefix("other_fields."))
 
 
-def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
-    """Locate a per-class date by its class code (the first word of its row source_text).
+def _class_label(source_text: str | None) -> list[str]:
+    """Normalised tokens of a row's class cell: everything before its first date."""
+    tokens: list[str] = []
+    for part in (source_text or "").split():
+        if find_date(part):
+            break
+        tokens += normalize(part).split()
+    return tokens
 
-    Returns the box of that class's row and whether the value's date is printed on that row.
-    The same dates often repeat on every row, so matching the row text alone can land on the
-    wrong class; anchoring on the code avoids that, and an unreadable code gives no box.
+
+def _box_of(words: list[dict]) -> Box:
+    left, top = min(w["left"] for w in words), min(w["top"] for w in words)
+    right = max(w["left"] + w["width"] for w in words)
+    bottom = max(w["top"] + w["height"] for w in words)
+    return Box(x=left, y=top, w=right - left, h=bottom - top)
+
+
+def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
+    """Locate a per-class date by the full class label of its row source_text ("LMV TR").
+
+    A table row is an OCR line containing a date; its class cell is the words just before the
+    first date. The label must match that cell exactly, on exactly one row: fuzzy or
+    first-word matching confuses classes such as LMV / LMV NT / LMV TR or MCWG / MCWOG, and
+    the same dates often repeat on every row. No match or several give no box rather than a
+    wrong one. Returns the row box and whether the value's date is printed on that row.
     """
-    parts = (field.source_text or "").split()
-    if not parts or find_date(parts[0]) or not words:
+    label = _class_label(field.source_text)
+    if not label:
         return None, False
-    anchor = match_bbox(parts[0], words)
-    if anchor is None:
+    lines: dict = {}
+    for w in words:
+        lines.setdefault(w.get("line"), []).append(w)
+
+    rows = []
+    for line in lines.values():
+        first_date = next((i for i, w in enumerate(line) if find_date(w["text"])), None)
+        if first_date is None:
+            continue
+        cell = [(token, i) for i, w in enumerate(line[:first_date]) for token in normalize(w["text"]).split()]
+        if len(cell) >= len(label) and [t for t, _ in cell[-len(label):]] == label:
+            rows.append([w for w in line[cell[-len(label)][1]:] if normalize(w["text"])])
+    if len(rows) != 1:
         return None, False
-    row = [w for w in words if anchor.y <= w["top"] + w["height"] / 2 <= anchor.y + anchor.h]
-    confirmed = any(find_date(w["text"]) == field.value for w in row)
-    return match_bbox(field.source_text, row) or anchor, confirmed
+    row = rows[0]
+    return _box_of(row), any(find_date(w["text"]) == field.value for w in row)
 
 
 def _as_date(field: FieldValue | None) -> date | None:

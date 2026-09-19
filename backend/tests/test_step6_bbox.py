@@ -166,3 +166,44 @@ def test_labelled_date_source_highlights_label_and_date():
     from app.services.extraction import match_bbox
 
     assert match_bbox("DOI: 16-06-2019", CANNED_WORDS) == box_of("DOI", "16-06-2019", words=CANNED_WORDS)
+
+
+# Many classes, some with similar codes, each with its own dates.
+MANY_ROWS = {
+    "mcwog": "MCWOG 01-02-2010 31-01-2030",
+    "mcwg": "MCWG 05-06-2015 04-06-2035",
+    "lmv": "LMV 10-11-2016 09-11-2036",
+    "lmv_nt": "LMV NT 10-11-2016 09-11-2036",
+    "lmv_tr": "LMV TR 12-03-2018 11-03-2021",
+}
+
+
+def many_class_merge(rows):
+    from app.services.extraction import merge
+
+    lines = ["Class of Vehicle DOI Valid Till", *rows.values()]
+    words = words_from_lines(lines, x0=20, y0=100, line_h=30, char_w=10, h=20)
+    other = {}
+    for cls, row in rows.items():
+        issue, till = row.split()[-2:]
+        other[f"{cls}_date_of_issue"] = fv(issue, MANY_ROWS[cls])
+        other[f"{cls}_valid_till"] = fv(till, MANY_ROWS[cls])
+    merged, _ = merge(make_licence(other_fields=other), "\n".join(lines), words=words)
+    return merged.other_fields, words
+
+
+def test_similar_class_codes_each_anchor_on_their_own_row():
+    fields, words = many_class_merge(MANY_ROWS)
+    for i, cls in enumerate(MANY_ROWS, start=1):  # line 0 is the header
+        for kind in ("date_of_issue", "valid_till"):
+            field = fields[f"{cls}_{kind}"]
+            assert field.bbox == row_box(i, words), f"{cls}_{kind}"
+            assert field.confidence == "high"
+
+
+def test_garbled_class_code_gets_no_box_instead_of_a_similar_row():
+    rows = {**MANY_ROWS, "mcwg": "MCW6 05-06-2015 04-06-2035"}  # OCR misread; MCWOG is 0.89 similar
+    fields, _ = many_class_merge(rows)
+    assert fields["mcwg_valid_till"].bbox is None
+    assert fields["mcwg_valid_till"].confidence == "review"
+    assert fields["mcwog_valid_till"].confidence == "high"
