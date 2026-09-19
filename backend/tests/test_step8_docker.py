@@ -1,4 +1,4 @@
-"""Step 8 (Phase 2) - Dockerfile structure. Pending until 8 is in PHASE2_STEPS_DONE.
+"""Step 8 (Phase 2) - Dockerfile structure.
 
 These static checks define the container contract; the real verification is
 `docker build -t licence-reader . && docker run -p 7860:7860 --env-file .env licence-reader`

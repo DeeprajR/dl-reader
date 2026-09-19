@@ -1,7 +1,6 @@
 """Step 6 (Phase 2) - bounding-box matching, field boxes and chat-source boxes.
 
-Acceptance tests written ahead of the code; pending until 6 is in PHASE2_STEPS_DONE.
-Interface defined here:
+Interface:
   extraction.match_bbox(target: str | None, words: list[dict]) -> Box | None   (pure function)
   extraction.merge(data, ocr_text, words=..., page=1) fills FieldValue.bbox
   chat sources carry the bbox of their chunk (fields and, best-effort, OCR text chunks)

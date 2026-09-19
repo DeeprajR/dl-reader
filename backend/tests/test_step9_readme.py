@@ -1,4 +1,4 @@
-"""Step 9 (Phase 2) - README.md contains everything the spec requires. Pending until 9 is done."""
+"""Step 9 (Phase 2) - README.md contains everything the spec requires."""
 
 import pytest
 from conftest import REPO_DIR

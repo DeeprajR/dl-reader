@@ -47,13 +47,6 @@ _doc_locks: dict[str, threading.RLock] = {}
 _doc_locks_guard = threading.Lock()
 
 
-def configure(path: Path | str) -> None:
-    """Point the vector store at `path` (default ./chroma)."""
-    global _chroma_path, _client
-    with _client_lock:
-        _chroma_path, _client = Path(path), None
-
-
 def _chroma():
     global _client
     with _client_lock:

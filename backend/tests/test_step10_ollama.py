@@ -1,6 +1,6 @@
 """Step 10 (Phase 2, optional stretch) - Ollama provider, the zero-PII-egress option.
 
-Interface defined here:
+Interface:
   get_provider("ollama/<model>") -> OllamaProvider with .model == "<model>"
   OllamaProvider(model, base_url="http://127.0.0.1:11434")
   an unreachable server raises ProviderError advising the LLM_MODEL change (never a crash)

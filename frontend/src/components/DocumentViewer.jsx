@@ -41,7 +41,7 @@ export default function DocumentViewer({ docId, meta, highlights = [] }) {
 
   return (
     <div className="flex justify-center rounded-xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
-      <div className="relative inline-block overflow-hidden" data-testid="document-viewer">
+      <div className="relative inline-block overflow-hidden">
         <img
           ref={imgRef}
           src={api.imageUrl(docId)}

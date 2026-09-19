@@ -1,19 +1,13 @@
-"""Shared fixtures and the phase/step pass-fail gates.
+"""Shared fixtures for the test suite.
 
 No real LLM or network calls: extraction uses a FakeProvider injected via the provider factory,
 any real OpenRouter completion raises, embeddings come from a deterministic hashing embedder and
 ChromaDB runs in memory.
 
-Phase / step gates
-  Every test module is marked with its phase and build step, so each can be checked alone:
-      pytest                 everything
-      pytest -m phase1       Phase 1 gate (steps 1-5): must pass
-      pytest -m step4        one build step
-  Phase 2 acceptance tests are written ahead of the code. A Phase 2 step not yet listed in
-  PHASE2_STEPS_DONE has its tests collected as strict xfail ("pending"): they define what
-  passing means without failing the suite. When a step is built, add it to PHASE2_STEPS_DONE
-  and its tests become binding pass/fail. (A pending test that already passes is reported as
-  a failure, so a finished step cannot go unmarked.)
+Every test module is marked with its build phase and step, so each can be checked alone:
+    pytest                 everything
+    pytest -m phase1       Phase 1 (steps 1-5)
+    pytest -m step4        one build step
 """
 
 import hashlib
@@ -42,21 +36,6 @@ from PIL import Image  # noqa: E402
 
 import app.main  # noqa: E402,F401  loads .env (TESSERACT_CMD, POPPLER_PATH) before skip checks run
 from app.schemas import FieldValue, LicenceData  # noqa: E402
-
-# Phase 2 steps that are built; their tests must pass. See module docstring.
-PHASE2_STEPS_DONE: set[int] = {6, 8, 9, 10}
-FIRST_PHASE2_STEP = 6
-
-
-def pytest_collection_modifyitems(config, items):
-    for item in items:
-        for marker in item.iter_markers():
-            step = re.fullmatch(r"step(\d+)", marker.name)
-            if step and int(step[1]) >= FIRST_PHASE2_STEP and int(step[1]) not in PHASE2_STEPS_DONE:
-                item.add_marker(
-                    pytest.mark.xfail(strict=True, reason=f"pending: Phase 2 step {step[1]} not built yet")
-                )
-
 
 # --- canned document -------------------------------------------------------------------------
 

@@ -155,7 +155,7 @@ Once dependencies are installed, day-to-day running is two commands: `uvicorn ap
 ```bash
 cd backend
 pytest                  # whole suite, ~17 s
-pytest -m phase1        # Phase 1 gate (steps 1-5)
+pytest -m phase1        # Phase 1 (steps 1-5)
 pytest -m step6         # a single build step (step1 ... step10)
 ```
 
@@ -165,7 +165,7 @@ The suite makes no real LLM or network calls:
 - **ChromaDB** runs in memory.
 - **OCR tests** use the real Tesseract binary and are skipped if it isn't installed.
 
-Every module is marked with its build phase and step, so each can be checked on its own. Acceptance tests for a step that isn't built yet are collected as *pending* (strict xfail), so the suite stays green. When a step is built, adding it to `PHASE2_STEPS_DONE` in `tests/conftest.py` makes its tests count; a pending test that already passes is reported as a failure, so a finished step can't be left unmarked.
+Every module is marked with its build phase and step, so each can be checked on its own.
 
 ### 6. Docker
 
