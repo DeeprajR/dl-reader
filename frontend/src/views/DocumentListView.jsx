@@ -8,6 +8,7 @@ function formatDate(iso) {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
 
+// Home screen: the upload button and the list of documents uploaded so far.
 export default function DocumentListView() {
   const [docs, setDocs] = useState(null)
   const [error, setError] = useState(null)

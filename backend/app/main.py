@@ -1,3 +1,8 @@
+"""The FastAPI application: settings, startup checks, error handling and routes.
+
+In the container it also serves the built frontend, so one process runs the whole app.
+"""
+
 import logging
 import os
 import shutil

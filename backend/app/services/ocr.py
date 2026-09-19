@@ -116,6 +116,10 @@ def _prepare(img: Image.Image) -> tuple[Image.Image, float]:
 
 
 def run_ocr(image_path: Path | str) -> OcrResult:
+    """Tesseract on the prepared image: the full text plus every word with its box and line.
+
+    Boxes are scaled back to the working image's pixels, so they can be drawn on it directly.
+    """
     pytesseract.pytesseract.tesseract_cmd = tesseract_cmd()
     with Image.open(image_path) as img:
         img.load()

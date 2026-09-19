@@ -1,3 +1,5 @@
+"""Request and response models shared by the API, the providers and the services."""
+
 from datetime import date
 from typing import Literal
 
@@ -12,6 +14,8 @@ class Box(BaseModel):
 
 
 class FieldValue(BaseModel):
+    """One extracted value with its evidence: the printed text, a confidence and where it is."""
+
     value: str | None
     source_text: str | None  # verbatim text as printed on the document
     confidence: Literal["high", "review"]
@@ -20,6 +24,8 @@ class FieldValue(BaseModel):
 
 
 class LicenceData(BaseModel):
+    """The licence as the LLM returns it and as the user edits it."""
+
     full_name: FieldValue
     licence_number: FieldValue
     date_of_birth: FieldValue  # value normalized to YYYY-MM-DD; source_text keeps printed form
@@ -32,6 +38,8 @@ class LicenceData(BaseModel):
 
 
 class ExtractionResult(BaseModel):
+    """What /extract returns and what is stored: fields, raw OCR text and review warnings."""
+
     doc_id: str
     data: LicenceData
     ocr_text: str

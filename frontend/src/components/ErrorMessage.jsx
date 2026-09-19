@@ -1,3 +1,4 @@
+// A red alert box for a failed request, with an optional retry button.
 export default function ErrorMessage({ message, onRetry, retryLabel = 'Retry' }) {
   return (
     <div role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-900 ring-1 ring-red-200">

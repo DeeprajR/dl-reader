@@ -6,6 +6,7 @@ import ErrorMessage from '../components/ErrorMessage.jsx'
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.pdf']
 const MAX_MB = 10 // mirrors the server default MAX_UPLOAD_MB; the server enforces its own limit
 
+// Checked in the browser for a fast, friendly message; the server repeats every check.
 function validate(file) {
   const name = file.name.toLowerCase()
   if (!ALLOWED_EXTENSIONS.some((ext) => name.endsWith(ext))) {
@@ -18,6 +19,7 @@ function validate(file) {
   return null
 }
 
+// Drag-and-drop or file picker for one document; on success it opens the document's workspace.
 export default function UploadView() {
   const inputRef = useRef(null)
   const [dragging, setDragging] = useState(false)

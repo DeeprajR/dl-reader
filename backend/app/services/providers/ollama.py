@@ -71,6 +71,8 @@ async def complete(
 
 
 class OllamaProvider:
+    """Extraction with a vision model served by Ollama: the image never leaves the machine."""
+
     def __init__(self, model: str, base_url: str | None = None):
         self.model = model
         self.base_url = (base_url or ollama_url()).rstrip("/")

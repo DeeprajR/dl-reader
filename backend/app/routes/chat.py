@@ -1,3 +1,5 @@
+"""POST /api/documents/{id}/chat - "Ask the document"; the grounding logic lives in services/rag.py."""
+
 import logging
 from datetime import date
 
@@ -27,6 +29,10 @@ def local_today(client_today: date | None) -> date:
 
 @router.post("/{doc_id}/chat", response_model=ChatResponse)
 async def chat(doc_id: str, body: ChatRequest):
+    """Answer one question from the document: validate, retrieve, then ask the LLM.
+
+    503 = the search index failed, 502 = the LLM failed; a refusal is a normal 200 answer.
+    """
     get_document_or_404(doc_id)
     question = body.question.strip()
     if not question:

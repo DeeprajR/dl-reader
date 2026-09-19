@@ -1,3 +1,9 @@
+"""Document endpoints: upload, list, image, extract, and saving the reviewed form.
+
+Uploads are validated (extension, size, magic bytes) and turned into one "working image" that
+OCR, the LLM and the viewer all share, so bounding boxes line up everywhere.
+"""
+
 import asyncio
 import io
 import logging
@@ -145,6 +151,7 @@ def list_documents():
 
 @router.post("", response_model=UploadResponse, status_code=201)
 async def upload_document(file: UploadFile | None = File(None)):
+    """Validate and store an upload. Every rejection is a 400 with a message the user can act on."""
     if file is None:
         raise HTTPException(400, "No file was uploaded. Please choose a JPG, PNG or PDF.")
 
@@ -154,6 +161,7 @@ async def upload_document(file: UploadFile | None = File(None)):
         shown = ext or "(none)"
         raise HTTPException(400, f"Unsupported file type {shown}. Please upload a JPG, PNG or PDF.")
 
+    # Read in chunks so an oversized upload is rejected without holding all of it in memory.
     limit_mb = max_upload_mb()
     limit_bytes = int(limit_mb * 1024 * 1024)
     chunks, size = [], 0
@@ -166,6 +174,7 @@ async def upload_document(file: UploadFile | None = File(None)):
 
     if not data:
         raise HTTPException(400, "The uploaded file is empty.")
+    # The content must match the extension: a renamed file is not trusted.
     if not data.startswith(_MAGIC[kind]):
         raise HTTPException(
             400, f"The file content is not a valid {_KIND_NAMES[kind]}, although its name ends in {ext}."
@@ -205,6 +214,10 @@ def get_meta(doc_id: str):
 
 
 def image_for_llm(data: bytes, media_type: str) -> tuple[bytes, str]:
+    """The image as sent to the LLM: unchanged if small enough, else downscaled to a JPEG.
+
+    Only the LLM sees the smaller copy; OCR and the highlights keep the full working image.
+    """
     with Image.open(io.BytesIO(data)) as img:
         if len(data) <= _LLM_MAX_BYTES and max(img.size) <= _LLM_MAX_SIDE:
             return data, media_type
@@ -217,6 +230,11 @@ def image_for_llm(data: bytes, media_type: str) -> tuple[bytes, str]:
 
 @router.post("/{doc_id}/extract", response_model=ExtractionResult)
 async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
+    """Run OCR and the vision LLM at the same time, cross-check them, store and index the result.
+
+    An LLM failure fails the request (502). An OCR failure does not: the fields are returned
+    unconfirmed, with a warning.
+    """
     doc = get_document_or_404(doc_id)
     path = storage.image_path(doc)
     if not path.is_file():
@@ -227,6 +245,7 @@ async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(502, str(e))
 
     image_bytes, media_type = await run_in_threadpool(image_for_llm, path.read_bytes(), doc["media_type"])
+    # OCR is blocking (a thread); the LLM call is async. The wait is the slower of the two.
     loop = asyncio.get_running_loop()
     ocr_result, llm_data = await asyncio.gather(
         loop.run_in_executor(None, ocr.run_ocr, path),
@@ -255,6 +274,7 @@ async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
         doc_id=doc_id, data=data, ocr_text=ocr_result.text, warnings=warnings + merge_warnings
     )
     storage.save_extraction(doc_id, result.model_dump_json(), ocr_words=ocr_result.words)
+    # Index for chat after the response is sent; chat builds the index itself if it gets there first.
     background_tasks.add_task(rag.index_document_safely, doc_id, result)
     return result
 

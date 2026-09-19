@@ -56,6 +56,8 @@ async def complete(client: AsyncOpenAI, model: str, messages: list[dict]) -> str
 
 
 class OpenRouterProvider:
+    """Extraction with any OpenRouter vision model (the image is sent as a data URL)."""
+
     def __init__(self, model: str):
         self.model = model
         self.client = openrouter_client()

@@ -95,6 +95,7 @@ def print_table(label_a: str, label_b: str, a: dict, b: dict) -> None:
 
 
 async def main() -> None:
+    """Read every sample with both models, then print a table per document and a summary."""
     if hasattr(sys.stdout, "reconfigure"):  # Windows consoles default to a legacy code page
         sys.stdout.reconfigure(encoding="utf-8")
     model_a = os.getenv("LLM_MODEL") or DEFAULT_MODEL
