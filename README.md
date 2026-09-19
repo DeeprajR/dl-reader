@@ -76,28 +76,45 @@ flowchart TD
 
 ## Setup/run instructions
 
-You need **Python 3.11+**, **Node.js 20.19+** and an **OpenRouter API key** (<https://openrouter.ai/keys>).
+There are two ways to run the app. Pick one:
 
-### 1. Install Tesseract and poppler
+| | **A. With Docker** (easiest) | **B. Directly on your computer** |
+|---|---|---|
+| You install | Git and Docker | Git, Python, Node.js, Tesseract and poppler |
+| Best for | Using the app | Changing the code and running the tests |
 
-- **macOS:** `brew install tesseract poppler`
-- **Ubuntu/Debian:** `sudo apt install tesseract-ocr poppler-utils`
-- **Windows:** either install the **UB Mannheim** build of Tesseract (<https://github.com/UB-Mannheim/tesseract/wiki>) and a **poppler-windows** release (<https://github.com/oschwartz10612/poppler-windows/releases>), or run `conda install -c conda-forge tesseract poppler`.
+Type the commands in a terminal: **PowerShell** on Windows, **Terminal** on macOS and Linux. After installing a program, close and reopen the terminal so it can find the new command.
 
-If the tools aren't on your `PATH` (common on Windows), add their locations to `.env` in step 2:
+### Step 1: Get an OpenRouter API key
 
-```ini
-TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
-POPPLER_PATH=C:\path\to\poppler\Library\bin
-```
+The app reaches the AI model through OpenRouter. Create an account at <https://openrouter.ai>, add some credit, and create a key at <https://openrouter.ai/keys>. Keep the key private.
 
-### 2. Add your settings
+### Step 2: Download the code
 
-In the project folder, copy the example settings file, then paste your key after `OPENROUTER_API_KEY=`:
+Install Git:
+
+- **Windows:** `winget install Git.Git`
+- **macOS:** install Homebrew from <https://brew.sh>, then run `brew install git`
+- **Ubuntu/Debian:** `sudo apt install git`
+
+Then download the code and go into its folder:
 
 ```bash
-cp backend/.env.example .env        # Windows: copy backend\.env.example .env
+git clone https://github.com/DeeprajR/dl-reader.git
+cd dl-reader
 ```
+
+Run every command below from this `dl-reader` folder, unless a step says otherwise.
+
+### Step 3: Add your settings
+
+Copy the example settings file to `.env`:
+
+```bash
+cp backend/.env.example .env
+```
+
+Open `.env` in a text editor (`notepad .env` on Windows, `open -e .env` on macOS, `nano .env` on Linux), paste your key after `OPENROUTER_API_KEY=` and save.
 
 | Setting | Meaning |
 |---|---|
@@ -106,23 +123,93 @@ cp backend/.env.example .env        # Windows: copy backend\.env.example .env
 | `LLM_CHAT_MODEL` | Optional different model for the chat |
 | `LLM_MODEL_ALT` | Second model, used only by the comparison script (default `anthropic/claude-sonnet-5`) |
 | `MAX_UPLOAD_MB` | Largest file you can upload (default 10) |
-| `TESSERACT_CMD`, `POPPLER_PATH` | Only needed if the tools aren't on your `PATH` |
+| `TESSERACT_CMD`, `POPPLER_PATH` | Where Tesseract and poppler are, if they aren't on your `PATH` (see option B) |
 
 `.env` is never committed, and your key never leaves the server.
 
-### 3. Start the backend (first terminal)
+### Option A: Run with Docker
+
+1. **Install Docker.**
+   - **Windows:** `winget install Docker.DockerDesktop`, then restart your computer if asked.
+   - **macOS:** download Docker Desktop from <https://www.docker.com/products/docker-desktop/>.
+   - **Linux:** follow <https://docs.docker.com/engine/install/>.
+
+   On Windows and macOS, open Docker Desktop and wait until it shows Docker is running.
+
+2. **Build and start the app:**
+
+   ```bash
+   docker build -t licence-reader .
+   docker run -p 7860:7860 --env-file .env licence-reader
+   ```
+
+   The first build downloads everything the app needs, so it takes several minutes. Later builds are faster.
+
+3. **Open <http://localhost:7860>.** To stop the app, press **Ctrl+C** in the terminal. To start it again later, run only the `docker run` line.
+
+### Option B: Run directly on your computer
+
+**1. Install Python 3.11+, Node.js 20.19+, Tesseract and poppler.**
+
+**Windows** (PowerShell):
+
+```powershell
+winget install Python.Python.3.14
+winget install OpenJS.NodeJS.LTS
+winget install UB-Mannheim.TesseractOCR
+winget install oschwartz10612.Poppler
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+The last line lets PowerShell run `npm` and the Python `activate` script.
+
+These install the **UB Mannheim** build of Tesseract and the **poppler-windows** build of poppler. Neither is added to your `PATH`, so tell the app where they are. Close and reopen PowerShell, then run this to print poppler's folder:
+
+```powershell
+(Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter pdftoppm.exe).DirectoryName
+```
+
+Add both locations to `.env`:
+
+```ini
+TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+POPPLER_PATH=<the folder printed above>
+```
+
+If you use conda, `conda install -c conda-forge tesseract poppler` installs both tools instead, and you don't need these two settings.
+
+**macOS** (with Homebrew):
+
+```bash
+brew install python node
+brew install tesseract poppler
+```
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt update
+sudo apt install python3-venv
+sudo apt install tesseract-ocr poppler-utils
+```
+
+Ubuntu's own Node.js is too old, so install the LTS version from <https://nodejs.org/en/download>. Check that `python3 --version` shows 3.11 or newer.
+
+**2. Start the backend** in a terminal:
 
 ```bash
 cd backend
-python -m venv .venv                 # once: create a virtual environment
+python3 -m venv .venv                # once. Windows: py -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements.txt      # once: install the packages
+pip install -r requirements.txt      # once, takes a few minutes
 uvicorn app.main:app --port 8000
 ```
 
-In every new terminal, run the `activate` line again before using `python`, `pytest` or `uvicorn`. Otherwise your system Python won't find the packages.
+When it shows `Application startup complete`, the backend is ready. Leave this terminal open.
 
-### 4. Start the frontend (second terminal)
+The `activate` line switches the terminal to the app's own Python and packages. Run it again in every new terminal before using `python`, `pytest` or `uvicorn`.
+
+**3. Start the frontend** in a second terminal:
 
 ```bash
 cd frontend
@@ -130,11 +217,11 @@ npm install                          # once
 npm run dev
 ```
 
-Open <http://localhost:5173>.
+Open <http://localhost:5173>. Both terminals must stay open while you use the app. Press **Ctrl+C** in each one to stop it. The first chat question downloads a small search model (about 90 MB), so it takes a little longer.
 
-### 5. Run the tests
+Next time, run the same commands but skip the lines marked `once`.
 
-In the `backend` folder, with the virtual environment activated:
+**4. Run the tests** in the `backend` folder, with the virtual environment activated:
 
 ```bash
 pytest
@@ -142,21 +229,15 @@ pytest
 
 The tests don't call the AI model or the internet, and take about 15 seconds.
 
-### 6. Or run everything with Docker
-
-```bash
-docker build -t licence-reader . && docker run -p 7860:7860 --env-file .env licence-reader
-```
-
-Open <http://localhost:7860>.
-
 ### Optional: run the AI model on your own computer (Ollama)
 
-To keep documents entirely on your machine, install [Ollama](https://ollama.com), download a vision model, and set `LLM_MODEL=ollama/qwen2.5vl:3b` in `.env`:
+To keep documents entirely on your machine, install Ollama (`winget install Ollama.Ollama` on Windows, or <https://ollama.com/download>), then download a vision model:
 
 ```bash
 ollama pull qwen2.5vl:3b
 ```
+
+Then set `LLM_MODEL=ollama/qwen2.5vl:3b` in `.env`.
 
 - **No key needed.** You don't need an OpenRouter key in this setup.
 - **Ollama elsewhere.** If Ollama runs somewhere else (for example, if the app runs in Docker), set `OLLAMA_HOST`, e.g. `http://host.docker.internal:11434`.
@@ -164,13 +245,13 @@ ollama pull qwen2.5vl:3b
 
 ### Optional: compare two AI models
 
-In the `backend` folder, with the virtual environment activated:
+Put some licence images or PDFs in a `samples` folder inside `dl-reader`. This folder is never committed. Then, in the `backend` folder with the virtual environment activated, run:
 
 ```bash
 python scripts/compare_models.py
 ```
 
-It reads the licences in the `samples/` folder with both `LLM_MODEL` and `LLM_MODEL_ALT`, and prints their answers side by side.
+It reads each licence with both `LLM_MODEL` and `LLM_MODEL_ALT`, and prints their answers side by side.
 
 ### Deployment
 
@@ -248,7 +329,7 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 - **No chat memory.** The chat answers each question on its own, without remembering earlier ones.
 - **Reading time.** Reading a licence takes about 8–15 seconds with the default model.
 - **No login.** Anyone who can open the app can see all uploads, so run it locally.
-- **No long-term storage.** Data stays in the app's local folders (`data/` and `chroma/`). A Docker container loses it when the container is removed.
+- **No long-term storage with Docker.** Documents are kept inside the container, so each `docker run` starts with an empty list. When run directly on your computer, they stay in `backend/data` and `backend/chroma`.
 
 ---
 
