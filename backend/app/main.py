@@ -29,6 +29,21 @@ from app.services.providers.base import OLLAMA_PREFIX, chat_model, is_local, llm
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("licence_reader")
 
+
+class LocalhostLink(logging.Filter):
+    """Print "Uvicorn running on http://localhost:7860" instead of the unopenable 0.0.0.0.
+
+    The container must listen on 0.0.0.0 for `docker run -p` to reach it; only the message changes.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and "0.0.0.0" in record.args:
+            record.args = tuple("localhost" if arg == "0.0.0.0" else arg for arg in record.args)
+        return True
+
+
+logging.getLogger("uvicorn.error").addFilter(LocalhostLink())
+
 FRONTEND_DIST = REPO_DIR / "frontend" / "dist"
 
 

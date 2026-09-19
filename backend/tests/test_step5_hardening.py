@@ -26,6 +26,17 @@ def test_startup_fails_fast_without_api_key(monkeypatch, tmp_path):
             pass
 
 
+@pytest.mark.parametrize(
+    ("host", "shown"),
+    [("0.0.0.0", "http://localhost:7860"), ("127.0.0.1", "http://127.0.0.1:7860")],
+)
+def test_startup_message_shows_an_openable_address(caplog, host, shown):
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        logging.getLogger("uvicorn.error").info("Uvicorn running on %s://%s:%d", "http", host, 7860)
+    assert shown in caplog.text
+    assert "0.0.0.0" not in caplog.text
+
+
 def test_startup_only_warns_when_ocr_tools_are_missing(monkeypatch, caplog):
     def missing():
         raise FileNotFoundError("tesseract")
