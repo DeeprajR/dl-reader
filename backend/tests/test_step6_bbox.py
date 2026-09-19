@@ -2,7 +2,7 @@
 
 Interface:
   extraction.match_bbox(target: str | None, words: list[dict]) -> Box | None   (pure function)
-  extraction.merge(data, ocr_text, words=..., page=1) fills FieldValue.bbox
+  extraction.merge(data, ocr_text, words=...) fills FieldValue.bbox and FieldValue.confidence_score
   chat sources carry the bbox of their chunk (fields and, best-effort, OCR text chunks)
 The highlight overlay / click-to-highlight UI is verified in the browser.
 """
@@ -223,19 +223,69 @@ def test_garbled_class_code_gets_no_box_instead_of_a_similar_row():
     assert fields["mcwog_valid_till"].confidence == "high"
 
 
-def test_fields_on_the_back_page_report_page_2():
-    """In a two-page PDF, a field found below the page break reports page 2."""
-    from app.services.extraction import merge, page_of
+# --- confidence score: how sure OCR was about the words a value was found in ------------------
 
-    assert page_of(None, [0, 500]) == 1
-    assert page_of(Box(x=0, y=499, w=5, h=5), [0, 500]) == 1
-    assert page_of(Box(x=0, y=500, w=5, h=5), [0, 500]) == 2
 
-    back = words_from_lines(["Issuing Authority : RTO, Pune"], y0=600)  # below the page break
-    front = [w for w in CANNED_WORDS if "RTO," not in w["text"] and w["text"] != "Pune"]
-    merged, _ = merge(make_licence(), CANNED_OCR_TEXT, words=front + back, page_offsets=[0, 500])
-    assert merged.full_name.page == 1
-    assert merged.issuing_authority.page == 2
+def with_conf(words, **conf_by_text):
+    """A copy of `words` in which the named words get the given OCR confidence."""
+    return [{**w, "conf": conf_by_text.get(w["text"], w["conf"])} for w in words]
+
+
+def test_confidence_score_is_the_average_ocr_confidence_of_the_matched_words():
+    """The score is Tesseract's average certainty (0-100) about exactly the words the value matched."""
+    from app.services.extraction import confidence_score, merge
+
+    assert confidence_score([{"conf": 90.0}, {"conf": 72.0}]) == 81
+    assert confidence_score([{"conf": 96.4}]) == 96
+    assert confidence_score([]) is None
+
+    words = with_conf(CANNED_WORDS, JOHN=60.0, DOE=80.0)
+    merged, _ = merge(make_licence(), CANNED_OCR_TEXT, words=words)
+    assert merged.full_name.confidence_score == 70  # only JOHN and DOE count
+    assert merged.licence_number.confidence_score == 95  # every other word is read at 95
+
+
+def test_confidence_score_is_none_when_the_value_is_not_located():
+    """No matched words, no score: a value that is not on the card, an empty field, or no OCR words."""
+    from app.services.extraction import merge
+
+    data = make_licence(issuing_authority=fv("NOT ON THE CARD"), vehicle_classes=fv(None))
+    merged, _ = merge(data, CANNED_OCR_TEXT, words=CANNED_WORDS)
+    assert merged.issuing_authority.confidence_score is None
+    assert merged.vehicle_classes.confidence_score is None
+
+    merged, _ = merge(make_licence(), CANNED_OCR_TEXT)  # OCR text only, no word list
+    assert merged.full_name.confidence == "high" and merged.full_name.confidence_score is None
+
+
+def test_confidence_score_never_trusts_the_models_own_number():
+    """A score sent by the AI model is discarded: the score only ever comes from OCR."""
+    from app.schemas import FieldValue
+    from app.services.extraction import merge
+
+    boasting = FieldValue(value="NOT ON THE CARD", source_text="NOT ON THE CARD", confidence="high",
+                          bbox=None, confidence_score=100)
+    merged, _ = merge(make_licence(full_name=boasting), CANNED_OCR_TEXT, words=CANNED_WORDS)
+    assert merged.full_name.confidence_score is None and merged.full_name.confidence == "review"
+
+
+def test_per_class_dates_get_the_score_of_their_own_row():
+    """A per-class date is scored from its class's table row, not from a row with the same dates."""
+    fields, _ = many_class_merge(MANY_ROWS)
+    assert fields["lmv_tr_valid_till"].confidence_score == 95
+    garbled, _ = many_class_merge({**MANY_ROWS, "mcwg": "MCW6 05-06-2015 04-06-2035"})
+    assert garbled["mcwg_valid_till"].confidence_score is None  # row not found: no score
+
+
+def test_extract_endpoint_returns_confidence_scores(client, extracted):
+    """Through the API: located fields carry a 0-100 score, and the score survives a save."""
+    data = client.get(f"/api/documents/{extracted}/extract").json()["data"]
+    assert data["full_name"]["confidence_score"] == 95
+    assert "page" not in data["full_name"]  # the unused page number is gone
+
+    data["full_name"]["value"] = "JOHN A DOE"
+    saved = client.put(f"/api/documents/{extracted}/data", json=data).json()
+    assert saved["full_name"]["confidence_score"] == 95
 
 
 def test_rows_are_found_by_position_even_when_ocr_splits_the_cells():

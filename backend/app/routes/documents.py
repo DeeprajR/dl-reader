@@ -104,26 +104,24 @@ def _to_png(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def _stack(pages: list[Image.Image]) -> tuple[Image.Image, list[int]]:
-    """Pages top to bottom on one white canvas; returns it and each page's top y offset."""
+def _stack(pages: list[Image.Image]) -> Image.Image:
+    """The pages top to bottom on one white canvas, with a small gap between them."""
     # The canvas is as wide as the widest page, and as tall as all pages plus the gaps.
     width = max(p.width for p in pages)
     height = sum(p.height for p in pages) + _PAGE_GAP * (len(pages) - 1)
     canvas = Image.new("RGB", (width, height), "white")
-    offsets, y = [], 0
+    y = 0
     for page in pages:
         canvas.paste(page.convert("RGB"), (0, y))
-        offsets.append(y)
         y += page.height + _PAGE_GAP
-    return canvas, offsets
+    return canvas
 
 
-def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, str, int, int, list[int]]:
+def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, str, int, int]:
     """Validate the content and produce the working image.
 
     Returns (image_bytes or None if the original is used as-is, image_ext, media_type, width,
-    height, page_offsets). A PDF's first two pages (front and back) are stacked into one image;
-    page_offsets holds each page's top y, so a field's page follows from where it is found.
+    height). A PDF's first two pages (front and back) are stacked into one image.
     """
     # A PDF is turned into one PNG: its first two pages, one above the other.
     if kind == "pdf":
@@ -144,8 +142,8 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
             raise HTTPException(400, "Could not read the PDF. The file may be damaged or password-protected.")
         if not pages:
             raise HTTPException(400, "The PDF has no pages.")
-        working, offsets = _stack(pages)
-        return _to_png(working), ".png", "image/png", working.width, working.height, offsets
+        working = _stack(pages)
+        return _to_png(working), ".png", "image/png", working.width, working.height
 
     # A JPG or PNG is opened to prove it really is an image, and is normally used as it is.
     try:
@@ -154,8 +152,8 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
             # Bake EXIF rotation into the pixels so OCR boxes and the displayed image agree.
             if img.getexif().get(_EXIF_ORIENTATION, 1) != 1:
                 upright = ImageOps.exif_transpose(img)
-                return _to_png(upright), ".png", "image/png", upright.width, upright.height, [0]
-            return None, "", _MEDIA_TYPES[kind], img.width, img.height, [0]
+                return _to_png(upright), ".png", "image/png", upright.width, upright.height
+            return None, "", _MEDIA_TYPES[kind], img.width, img.height
     except Exception:
         raise HTTPException(400, "Could not read the image. The file may be damaged.")
 
@@ -205,9 +203,7 @@ async def upload_document(file: UploadFile | None = File(None)):
 
     # Check 4: the file must really open as an image or PDF. Decoding is slow, so it runs
     # in a worker thread and the server stays free for other requests.
-    image, image_ext, media_type, width, height, page_offsets = await run_in_threadpool(
-        prepare_working_image, kind, data
-    )
+    image, image_ext, media_type, width, height = await run_in_threadpool(prepare_working_image, kind, data)
     doc_id = storage.save_document(
         filename_label=_filename_label(file.filename),
         original=data,
@@ -217,8 +213,6 @@ async def upload_document(file: UploadFile | None = File(None)):
         media_type=media_type,
         width=width,
         height=height,
-        page_number=1,
-        page_offsets=page_offsets,
     )
     return {"doc_id": doc_id}
 
@@ -307,10 +301,8 @@ async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
     if all(getattr(llm_data, name).value is None for name in CORE_FIELDS):
         warnings.append("No driving licence fields were found. Is this image a driving licence?")
 
-    # The cross-check: sets each field's confidence, highlight position and page.
-    data, merge_warnings = extraction.merge(
-        llm_data, ocr_result.text, words=ocr_result.words, page_offsets=storage.page_offsets(doc)
-    )
+    # The cross-check: sets each field's confidence, highlight position and confidence score.
+    data, merge_warnings = extraction.merge(llm_data, ocr_result.text, words=ocr_result.words)
     result = ExtractionResult(
         doc_id=doc_id, data=data, ocr_text=ocr_result.text, warnings=warnings + merge_warnings
     )

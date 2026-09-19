@@ -58,7 +58,7 @@ flowchart TD
 **How it works**
 
 1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name.
-2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify.
+2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify. Each located field also gets an **OCR confidence score** (0–100%): how sure OCR was about the printed words the value was found in.
 3. **Review.** Edit and save the form. Click a field to see it on the document, or click a highlight to jump to its field.
 4. **Chat.** Each answer is built only from text found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
 
@@ -279,7 +279,7 @@ OCR can misread a character, but it never invents anything. An AI model reads we
 1. **Copied text.** The AI must copy, word for word, the text it used for each value, and leave a field empty rather than guess.
 2. **Cross-check.** That copied text is compared with what OCR read. Only matching fields are confirmed; a made-up value has nothing to match, so it's always marked Please verify.
 3. **Date checks.** Dates must make sense (birth before issue, issue before expiry), which catches swapped dates.
-4. **Visible sources.** Every field shows the text it came from and where it is on the document, so checking takes a glance.
+4. **Visible sources.** Every field shows the text it came from, where it is on the document, and its OCR confidence score, so checking takes a glance.
 
 ### Chat
 
@@ -328,6 +328,7 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 
 - **OCR and the AI run at the same time**, so you wait for the slower one, not both.
 - **Highlights use OCR's word positions**, because the AI's positions are unreliable and OCR's are exact.
+- **The confidence score comes from OCR, never from the AI.** Tesseract rates every word it reads; a field's score is the average for the words it was found in, and a score below 70% is shown in amber. An AI model asked to rate itself gives confident numbers even when it is wrong, so its own score is discarded.
 - **Table lines are erased before OCR.** OCR skips rows in tables with ruled lines; erasing the lines fixed this on every test card.
 - **Dates are checked for order** (birth before issue, issue before expiry). OCR can confirm a date is printed, but not which label it belongs to.
 - **The first two PDF pages form one image**, because two-sided licences are often scanned as two pages.
@@ -339,7 +340,8 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 ## Known limitations
 
 - **Confirmed doesn't mean certain.** "Confirmed" means OCR and the AI agree. If both misread the same text, it won't be caught, so always review the form.
-- **Some fields can't be highlighted.** Highlights depend on OCR: unusual fonts, busy backgrounds or dotted table lines can stop a field from being found. It then shows its source text without a highlight.
+- **The score measures print quality, not correctness.** A high OCR confidence score means the words were easy to read, not that the value is right. Whether a value is right is what "confirmed" and "Please verify" are for.
+- **Some fields can't be highlighted.** Highlights depend on OCR: unusual fonts, busy backgrounds or dotted table lines can stop a field from being found. It then shows its source text without a highlight or a score.
 - **Personal data (PII).** With the default setup, images and chat questions are sent through OpenRouter to the AI provider. OpenRouter's zero-data-retention setting is enabled on the account. For fully local processing, use Ollama; OCR and chat search always run locally.
 - **Two-sided licences.** Both sides in one image, or a two-page PDF, work. Front and back uploaded as two separate files are treated as two documents, and PDF pages after the second are ignored.
 - **No chat memory.** The chat answers each question on its own, without remembering earlier ones.

@@ -131,8 +131,10 @@ def test_merge_does_not_mutate_input():
 def test_schema_roundtrip():
     """Spec test 4: ExtractionResult serializes/deserializes losslessly."""
     data = make_licence()
-    data.full_name = FieldValue(value="JOHN DOE", source_text="JOHN DOE", confidence="high", bbox=Box(x=1, y=2, w=3, h=4))
-    data.other_fields["state"] = FieldValue(value=None, source_text=None, confidence="review", bbox=None, page=1)
+    data.full_name = FieldValue(
+        value="JOHN DOE", source_text="JOHN DOE", confidence="high", bbox=Box(x=1, y=2, w=3, h=4), confidence_score=93
+    )
+    data.other_fields["state"] = FieldValue(value=None, source_text=None, confidence="review", bbox=None, confidence_score=None)
     result = ExtractionResult(doc_id="d1", data=data, ocr_text="line 1\nline 2 “quoted”", warnings=["w1"])
 
     restored = ExtractionResult.model_validate_json(result.model_dump_json())

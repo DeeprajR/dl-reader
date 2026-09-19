@@ -36,8 +36,9 @@ class FieldValue(BaseModel):
     confidence: Literal["high", "review"]
     # Where the source text is on the image. None when OCR could not find it.
     bbox: Box | None
-    # The PDF page the value is on: 1 for the front, 2 for the back. Images are always page 1.
-    page: int = 1
+    # How sure OCR was about the printed words this value was found in: Tesseract's average
+    # certainty, 0 to 100. None when the value was not located on the image.
+    confidence_score: int | None = None
 
 
 class LicenceData(BaseModel):

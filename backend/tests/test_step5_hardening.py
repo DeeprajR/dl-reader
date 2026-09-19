@@ -52,6 +52,38 @@ def test_startup_only_warns_when_ocr_tools_are_missing(monkeypatch, caplog):
     assert "poppler" in caplog.text
 
 
+def test_database_from_an_older_version_is_cleaned_up(tmp_path):
+    """Columns that older versions stored but never read are dropped, and the documents survive."""
+    import sqlite3
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = sqlite3.connect(data_dir / "app.db")
+    conn.execute(
+        "CREATE TABLE documents (doc_id TEXT PRIMARY KEY, filename_label TEXT NOT NULL, original_name TEXT NOT NULL,"
+        " image_name TEXT NOT NULL, media_type TEXT NOT NULL, page_number INTEGER NOT NULL, page_offsets TEXT,"
+        " width INTEGER NOT NULL, height INTEGER NOT NULL, uploaded_at TEXT NOT NULL, extraction TEXT, ocr_words TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO documents VALUES ('d1', 'old.png', 'd1.png', 'd1.png', 'image/png', 1, '[0]', 8, 6,"
+        " '2026-09-19T00:00:00+00:00', NULL, NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    storage.init(data_dir)
+    doc = storage.get_document("d1")
+    assert doc["filename_label"] == "old.png" and doc["width"] == 8
+    assert "page_number" not in doc and "page_offsets" not in doc
+
+
+def test_no_cors_headers_are_sent(client):
+    """The frontend is always served from the API's own address, so no other site is allowed in."""
+    response = client.get("/api/documents", headers={"Origin": "http://localhost:5173"})
+    assert response.status_code == 200
+    assert "access-control-allow-origin" not in response.headers
+
+
 def test_unhandled_errors_return_generic_json_without_details(monkeypatch, tmp_path):
     """An unexpected error gives a generic 500 message: no file paths and no stack trace leak out."""
     from fastapi.testclient import TestClient

@@ -90,7 +90,7 @@ export function parseOther(text, previous) {
       // An existing item keeps its source and highlight. A new one has none, and starts as "please verify".
       result[key] = previous[key]
         ? { ...previous[key], value }
-        : { value, source_text: null, confidence: 'review', bbox: null, page: 1 }
+        : { value, source_text: null, confidence: 'review', bbox: null, confidence_score: null }
     }
   }
   return result

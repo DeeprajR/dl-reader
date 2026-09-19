@@ -5,6 +5,7 @@ module decides, field by field:
 
   * confidence - "high" when OCR also read that text, otherwise "review" ("Please verify")
   * bbox       - where the text is on the image, from OCR's word positions, for the highlight
+  * score      - how sure OCR was about the printed words the value was found in (0-100)
   * dates      - normalised to YYYY-MM-DD, and checked for an impossible order
 
 Everything here is pure logic on text and numbers: no files, no network, no AI calls.
@@ -203,56 +204,72 @@ def parts_match_ocr(target: str | None, ocr_text: str) -> bool:
     return all(f" {part} " in padded for part in parts)
 
 
-def match_bbox(target: str | None, words: list[dict]) -> Box | None:
-    """Locate `target` in the Tesseract word list; the union box of the best window, or None.
+def match_words(target: str | None, words: list[dict]) -> list[dict]:
+    """Locate `target` in the Tesseract word list: the words of the best window, or [].
 
     Windows of consecutive words (target word count ±1) are scored by the difflib ratio of
-    their joined normalised text against the normalised target; below BBOX_MATCH_RATIO there
-    is no box. A window may cross lines, so a multi-line value such as an address gets one
-    box covering all of its lines. Pure function; None simply means "show the snippet only".
+    their joined normalised text against the normalised target; below BBOX_MATCH_RATIO nothing
+    is found. A window may cross lines, so a multi-line value such as an address is found as
+    one run of words covering all of its lines. Pure function.
     """
     norm_target = normalize(target)
     if not norm_target or not words:
-        return None
+        return []
     # Punctuation-only words (":", "-", "|") normalise to nothing: drop them so they neither
     # count as words nor break a window, on both sides.
     n = sum(1 for part in (target or "").split() if normalize(part))
     kept = [(normalize(w["text"]), w) for w in words]
     kept = [(text, w) for text, w in kept if text]
     if not kept:
-        return None
+        return []
 
     score, start, end = _best_window(norm_target, [text for text, _ in kept], n)
     if score < BBOX_MATCH_RATIO:
-        return None
-    # The highlight is the smallest rectangle that contains every word of the best window.
-    window = [w for _, w in kept[start:end]]
-    left = min(w["left"] for w in window)
-    top = min(w["top"] for w in window)
-    right = max(w["left"] + w["width"] for w in window)
-    bottom = max(w["top"] + w["height"] for w in window)
-    return Box(x=left, y=top, w=right - left, h=bottom - top)
+        return []
+    return [w for _, w in kept[start:end]]
 
 
-def match_bbox_parts(target: str | None, words: list[dict]) -> Box | None:
+def match_bbox(target: str | None, words: list[dict]) -> Box | None:
+    """Where `target` is on the image: the smallest rectangle around the words it was matched
+    to, or None ("show the source text only")."""
+    found = match_words(target, words)
+    return _box_of(found) if found else None
+
+
+def match_words_parts(target: str | None, words: list[dict]) -> list[dict]:
     """Fallback for values whose parts are not consecutive in OCR reading order.
 
     A table column such as "LMV\\nMCWG" is read row by row by Tesseract, so the whole value
     never forms one window. Each part (split on lines, commas, semicolons) is matched on its
-    own and the boxes of the parts that were found are unioned. Parts shorter than
+    own and the words of the parts that were found are returned together. Parts shorter than
     MIN_PART_CHARS are ignored: they would match almost anywhere.
     """
     parts = [p for p in re.split(r"[\n,;]+", target or "") if len(normalize(p)) >= MIN_PART_CHARS]
     if len(parts) < 2:
-        return None
-    # Find each part on its own, and keep the ones that were found.
-    boxes = [box for box in (match_bbox(p, words) for p in parts) if box]
-    if not boxes:
-        return None
-    # One rectangle around all of them.
-    left, top = min(b.x for b in boxes), min(b.y for b in boxes)
-    right, bottom = max(b.x + b.w for b in boxes), max(b.y + b.h for b in boxes)
-    return Box(x=left, y=top, w=right - left, h=bottom - top)
+        return []
+    # Find each part on its own. A word that two parts share is kept once.
+    found: dict[int, dict] = {}
+    for part in parts:
+        for w in match_words(part, words):
+            found[id(w)] = w
+    return list(found.values())
+
+
+def match_bbox_parts(target: str | None, words: list[dict]) -> Box | None:
+    """One rectangle around every part of a multi-part value that was found, or None."""
+    found = match_words_parts(target, words)
+    return _box_of(found) if found else None
+
+
+def confidence_score(words: list[dict]) -> int | None:
+    """How sure OCR was about `words`: Tesseract's average certainty, from 0 to 100.
+
+    Tesseract rates every word it reads. A low score means the print was hard to read (blurred,
+    tiny, on a busy background), so the value deserves a closer look even when it matched.
+    None when there are no words, i.e. the value was not located on the image.
+    """
+    scores = [w["conf"] for w in words if w.get("conf") is not None]
+    return round(sum(scores) / len(scores)) if scores else None
 
 
 # --- per-class validity and date order ------------------------------------------------------
@@ -315,19 +332,19 @@ def _visual_rows(words: list[dict]) -> list[list[dict]]:
     return [sorted(row, key=lambda w: w["left"]) for row in rows]
 
 
-def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
+def _class_row(field: FieldValue, words: list[dict]) -> tuple[list[dict], bool]:
     """Locate a per-class date by the full class label of its row source_text ("LMV TR").
 
     In each visual row, a class cell is the run of non-date words just before a date; the
     label must match such a cell exactly (as its trailing words), and the class's dates are
     the date words that follow. Fuzzy or first-word matching confuses classes such as LMV /
     LMV NT / LMV TR or MCWG / MCWOG, and the same dates often repeat on every row, so a label
-    found on no row or several gives no box rather than a wrong one. Returns the box of the
-    label and its dates, and whether the value's date is among them.
+    found on no row or several gives nothing rather than the wrong row. Returns the words of
+    the label and its dates, and whether the value's date is among them.
     """
     label = _class_label(field.source_text)
     if not label:
-        return None, False
+        return [], False
     # Every (label words, date words) pair found on the card for this label.
     matches = []
     for row in _visual_rows(words):
@@ -351,11 +368,11 @@ def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
                 label_words = list(dict.fromkeys(id(w) for _, w in cell[-len(label):]))
                 matches.append(([w for w in row if id(w) in label_words], dates))
             cell = []
-    # Zero matches: the row was not found. Two or more: ambiguous. Either way, no box.
+    # Zero matches: the row was not found. Two or more: ambiguous. Either way, nothing.
     if len(matches) != 1:
-        return None, False
+        return [], False
     label_words, dates = matches[0]
-    return _box_of(label_words + dates), any(find_date(w["text"]) == field.value for w in dates)
+    return label_words + dates, any(find_date(w["text"]) == field.value for w in dates)
 
 
 def as_date(field: FieldValue | None) -> date | None:
@@ -452,19 +469,8 @@ def iter_fields(data: LicenceData) -> list[tuple[str, FieldValue]]:
     return core + [(f"other_fields.{k}", v) for k, v in data.other_fields.items()]
 
 
-def page_of(box: Box | None, page_offsets: list[int]) -> int:
-    """1-based source page of a box in a working image made of stacked pages."""
-    if box is None:
-        return 1
-    # `page_offsets` holds the y pixel where each page starts, e.g. [0, 1424]. The page number
-    # is one plus the number of later pages that start at or above the box.
-    return 1 + sum(1 for top in page_offsets[1:] if box.y >= top)
-
-
-def merge(
-    data: LicenceData, ocr_text: str, words: list[dict] | None = None, page_offsets: list[int] | None = None
-) -> tuple[LicenceData, list[str]]:
-    """Cross-check every field against OCR: confidence from the text, bbox from word boxes.
+def merge(data: LicenceData, ocr_text: str, words: list[dict] | None = None) -> tuple[LicenceData, list[str]]:
+    """Cross-check every field against OCR: confidence from the text, bbox and score from the words.
 
     Per-class dates are anchored on their class's table row, and impossible date orders are
     flagged. Returns a new LicenceData plus warnings. Null-value fields are always "review".
@@ -476,14 +482,14 @@ def merge(
     if low_ocr:
         warnings.append(LOW_OCR_WARNING)
 
-    words, page_offsets = words or [], page_offsets or [0]
+    words = words or []
     for name, field in iter_fields(data):
         per_class = class_date_key(name) is not None
         is_date = name in DATE_FIELDS or per_class
         # Start from "unconfirmed". The AI's own confidence and bbox are never trusted.
-        field.page = 1
         field.confidence = "review"
         field.bbox = None
+        field.confidence_score = None
 
         # Step 1: normalise dates to YYYY-MM-DD.
         if is_date and field.value is not None:
@@ -500,15 +506,17 @@ def merge(
             continue
         # Step 2a: a per-class date is found on, and confirmed by, the table row of its class.
         if per_class:
-            field.bbox, on_its_row = _class_row(field, words)
-            field.page = page_of(field.bbox, page_offsets)
+            found, on_its_row = _class_row(field, words)
+            field.bbox = _box_of(found) if found else None
+            field.confidence_score = confidence_score(found)
             if on_its_row and not low_ocr:
                 field.confidence = "high"
             continue
         # Step 2b: every other field is looked up by the text the AI copied from the card.
         anchor = field.source_text or field.value
-        field.bbox = match_bbox(anchor, words) or match_bbox_parts(anchor, words)
-        field.page = page_of(field.bbox, page_offsets)
+        found = match_words(anchor, words) or match_words_parts(anchor, words)
+        field.bbox = _box_of(found) if found else None
+        field.confidence_score = confidence_score(found)
         if low_ocr:
             continue
         if text_matches_ocr(anchor, ocr_text, is_date=is_date) or parts_match_ocr(anchor, ocr_text):

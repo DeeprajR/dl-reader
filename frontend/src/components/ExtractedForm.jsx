@@ -14,6 +14,24 @@ const STAGES = [
   { at: 9000, text: 'Verifying…' },
 ]
 
+// Below this score (0-100) OCR itself found the print hard to read, so the score is shown in amber.
+const LOW_SCORE = 70
+
+// "· OCR confidence 93%": how sure OCR was about the printed words the value was found in.
+// Nothing is shown for a value that was not located on the image (score null).
+function ConfidenceScore({ score }) {
+  if (score == null) return null
+  return (
+    <span
+      className={score < LOW_SCORE ? 'font-medium text-amber-700' : 'text-slate-400'}
+      title="How sure OCR was about the printed words this value was found in"
+    >
+      {' '}
+      · OCR confidence {score}%
+    </span>
+  )
+}
+
 // One labelled input with its "Please verify" mark and its source line.
 // `active` = this field's highlight is selected on the document.
 function Field({ id, label, kind, field, active, onChange, onFocus }) {
@@ -55,6 +73,7 @@ function Field({ id, label, kind, field, active, onChange, onFocus }) {
         {field.value != null && field.source_text && !field.bbox && (
           <span className="text-slate-400"> · not located on the image</span>
         )}
+        <ConfidenceScore score={field.confidence_score} />
       </p>
     </div>
   )
@@ -107,6 +126,7 @@ function OtherField({ id, text, items, active, onChange, onFocus }) {
                   {field.confidence === 'review' && <span className="text-amber-700">⚠ </span>}
                   {label}: {field.source_text ?? <em>not found on the document</em>}
                   {field.source_text && !field.bbox && <span className="text-slate-400"> · not located on the image</span>}
+                  <ConfidenceScore score={field.confidence_score} />
                 </li>
               ))}
             </ul>

@@ -21,7 +21,6 @@ load_dotenv(REPO_DIR / ".env")
 # from .env are in place before any module of the app is imported.
 from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
@@ -112,15 +111,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Driving Licence Reader", lifespan=lifespan)
-
-# Lets the Vite dev server's pages (port 5173) call this API (port 8000) directly. Normally
-# the dev server forwards /api itself, and in Docker both share one port, so this is a fallback.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 # --- error handling -----------------------------------------------------------------------------

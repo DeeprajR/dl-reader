@@ -26,8 +26,6 @@ CREATE TABLE IF NOT EXISTS documents (
     original_name   TEXT NOT NULL,     -- stored file name of the upload
     image_name      TEXT NOT NULL,     -- stored file name of the working image
     media_type      TEXT NOT NULL,     -- media type of the working image
-    page_number     INTEGER NOT NULL,  -- first source page of the working image (PDFs: 1)
-    page_offsets    TEXT,              -- JSON top y of each stacked PDF page; NULL = one page
     width           INTEGER NOT NULL,
     height          INTEGER NOT NULL,
     uploaded_at     TEXT NOT NULL,
@@ -45,13 +43,14 @@ def init(data_dir: Path | str | None = None) -> None:
     uploads_dir().mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.execute(_SCHEMA)
-        # "CREATE TABLE IF NOT EXISTS" leaves an existing table as it is, so columns that
-        # were added in later versions are added here to older databases.
+        # "CREATE TABLE IF NOT EXISTS" leaves an existing table as it is, so a database made
+        # by an older version is brought up to date here.
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)")}
         if "ocr_words" not in columns:  # databases created before word boxes were stored
             conn.execute("ALTER TABLE documents ADD COLUMN ocr_words TEXT")
-        if "page_offsets" not in columns:  # databases created before two-page PDFs
-            conn.execute("ALTER TABLE documents ADD COLUMN page_offsets TEXT")
+        for unused in ("page_number", "page_offsets"):  # columns that were stored but never read
+            if unused in columns:
+                conn.execute(f"ALTER TABLE documents DROP COLUMN {unused}")
 
 
 def uploads_dir() -> Path:
@@ -84,8 +83,6 @@ def save_document(
     media_type: str,
     width: int,
     height: int,
-    page_number: int = 1,
-    page_offsets: list[int] | None = None,
 ) -> str:
     """Persist an upload. `image=None` means the original itself is the working image."""
     doc_id = str(uuid.uuid4())
@@ -97,24 +94,22 @@ def save_document(
     if image is None:
         image_name = original_name
     else:
-        image_name = f"{doc_id}.page{page_number}{image_ext}"
+        image_name = f"{doc_id}.working{image_ext}"
         (uploads_dir() / image_name).write_bytes(image)
 
     with _connect() as conn:
         conn.execute(
             "INSERT INTO documents (doc_id, filename_label, original_name, image_name, media_type,"
-            " page_number, width, height, uploaded_at, page_offsets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " width, height, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 doc_id,
                 filename_label,
                 original_name,
                 image_name,
                 media_type,
-                page_number,
                 width,
                 height,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                json.dumps(page_offsets or [0]),
             ),
         )
     return doc_id
@@ -137,11 +132,6 @@ def list_documents() -> list[dict]:
         ).fetchall()
     # SQLite has no boolean type: it returns 0 or 1, which is turned into False or True here.
     return [{**dict(r), "has_extraction": bool(r["has_extraction"])} for r in rows]
-
-
-def page_offsets(doc: dict) -> list[int]:
-    """Top y of each page stacked in the working image ([0] for a single page)."""
-    return json.loads(doc.get("page_offsets") or "[0]")
 
 
 def image_path(doc: dict) -> Path:
