@@ -21,8 +21,9 @@ from app.services.providers.base import (
 # Ollama's default address, written as 127.0.0.1: Ollama listens on IPv4 only, and resolving
 # "localhost" tries ::1 first, which costs ~2 s per request on Windows before falling back.
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-# Vision models on CPU typically take 30-60 s per image, longer while the model first loads.
-OLLAMA_TIMEOUT_S = 180.0
+# A cold first request includes loading the model (Ollama allows 5 min for that) plus warm-up:
+# measured ~2m50s for qwen2.5vl:3b on a 6 GB GPU. Warm requests take ~20 s on GPU, 30-60 s on CPU.
+OLLAMA_TIMEOUT_S = 300.0
 
 
 def ollama_url() -> str:

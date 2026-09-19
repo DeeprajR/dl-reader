@@ -179,13 +179,18 @@ Open <http://localhost:7860>. FastAPI serves both the API and the built frontend
 To keep licence images and chat excerpts on your own machine, run the model locally with [Ollama](https://ollama.com):
 
 ```bash
-ollama pull qwen2.5vl            # any Ollama model with vision support
+ollama pull qwen2.5vl:3b         # any Ollama model with vision support
+# or run Ollama itself in Docker (GPU optional):
+docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+docker exec ollama ollama pull qwen2.5vl:3b
 ```
 
 ```ini
-LLM_MODEL=ollama/qwen2.5vl       # extraction runs locally
+LLM_MODEL=ollama/qwen2.5vl:3b    # extraction runs locally
 LLM_CHAT_MODEL=                  # empty = chat uses the same local model
 ```
+
+`qwen2.5vl:3b` (3.2 GB) fits a 6 GB GPU. The default `qwen2.5vl` tag (7B) reads better, but needs more memory.
 
 - **Same pipeline.** The `OllamaProvider` uses the same prompt, the same JSON parsing and the same one-retry rule as the OpenRouter provider.
 - **Chat stays local too.** Chat goes to Ollama whenever the chat model is an `ollama/...` model.
@@ -193,11 +198,20 @@ LLM_CHAT_MODEL=                  # empty = chat uses the same local model
 - **Where the server is.** The app uses Ollama's own `OLLAMA_HOST` setting (default `http://127.0.0.1:11434`, the local Ollama server). From inside Docker, point it at the host: `OLLAMA_HOST=http://host.docker.internal:11434`.
 - **Nothing leaves the machine.** With this setup, the image, OCR text and chat excerpts never leave the machine.
 
-**CPU latency.** On a CPU-only machine, a vision model typically needs **30–60 s per licence**, and longer the first time while the model loads. Hence a 180 s timeout for Ollama calls. A GPU brings this down to a few seconds.
+**Latency.** On a CPU-only machine, a vision model typically needs **30–60 s per licence**. Measured with `qwen2.5vl:3b` on a 6 GB GTX 1660 Ti:
+- **Warm:** about **20 s** per licence, and 1–2 s per chat answer.
+- **Cold:** the *first* request after Ollama starts, or after 5 idle minutes, also loads and warms up the model, which took about **3 minutes** here.
+
+Ollama calls therefore get a 300 s timeout, rather than the 60 s used for OpenRouter.
+
+**Quality (same model, both sample licences).**
+- **Extraction:** every core field was correct. The model once invented `country: INDIA` for the Delhi card, which doesn't print it, and the OCR cross-check flagged it for review.
+- **Chat:** the phone-number question always got the exact refusal. The small model tends to answer tersely without quoting its supporting text, although the cited sources are still returned and can be highlighted.
+- **Over-refusal:** in one of two runs, it answered the expiry question with the refusal even though `Field: date_of_expiry = …` was the top retrieved excerpt. Small models err towards refusing, which is the safe direction. For better chat, use the 7B model, or set `LLM_CHAT_MODEL` to a stronger local text model (chat doesn't need vision).
 
 **Failure handling.** If Ollama isn't running, or the model hasn't been pulled:
 - Startup logs a warning.
-- Extraction returns a clear error such as *"Could not reach Ollama at … Start it (`ollama serve`) and pull the model (`ollama pull qwen2.5vl`), or set LLM_MODEL to an OpenRouter model."* The app never crashes.
+- Extraction returns a clear error such as *"Could not reach Ollama at … Start it (`ollama serve`) and pull the model (`ollama pull qwen2.5vl:3b`), or set LLM_MODEL to an OpenRouter model."* The app never crashes.
 
 ### Model comparison script
 
