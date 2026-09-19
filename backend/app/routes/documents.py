@@ -1,4 +1,6 @@
+import asyncio
 import io
+import logging
 import os
 import re
 import uuid
@@ -10,8 +12,12 @@ from pdf2image import convert_from_bytes
 from pdf2image.exceptions import PDFInfoNotInstalledError
 from PIL import Image, ImageOps
 
-from app.schemas import DocumentSummary, ImageMeta, UploadResponse
-from app.services import storage
+from app.schemas import DocumentSummary, ExtractionResult, ImageMeta, UploadResponse
+from app.services import extraction, ocr, storage
+from app.services.providers import base as providers
+from app.services.providers.base import ProviderError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -23,6 +29,10 @@ _KIND_NAMES = {"jpeg": "JPEG", "png": "PNG", "pdf": "PDF"}
 _EXIF_ORIENTATION = 0x0112
 _PDF_DPI = 200
 _CHUNK = 1024 * 1024
+# Vision models cap image size (some at 5 MB); larger working images are downscaled for the LLM
+# only. OCR always runs on the full-resolution working image.
+_LLM_MAX_SIDE = 2048
+_LLM_MAX_BYTES = 4 * 1024 * 1024
 
 
 def max_upload_mb() -> float:
@@ -53,7 +63,7 @@ def _to_png(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def _prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, str, int, int]:
+def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, str, int, int]:
     """Validate the content and produce the working image.
 
     Returns (image_bytes or None if the original is used as-is, image_ext, media_type, width, height).
@@ -124,7 +134,7 @@ async def upload_document(file: UploadFile | None = File(None)):
         )
 
     image, image_ext, media_type, width, height = await run_in_threadpool(
-        _prepare_working_image, kind, data
+        prepare_working_image, kind, data
     )
     doc_id = storage.save_document(
         filename_label=_filename_label(file.filename),
@@ -153,3 +163,61 @@ def get_image(doc_id: str):
 def get_meta(doc_id: str):
     doc = get_document_or_404(doc_id)
     return {"width": doc["width"], "height": doc["height"]}
+
+
+def image_for_llm(data: bytes, media_type: str) -> tuple[bytes, str]:
+    with Image.open(io.BytesIO(data)) as img:
+        if len(data) <= _LLM_MAX_BYTES and max(img.size) <= _LLM_MAX_SIDE:
+            return data, media_type
+        small = img.convert("RGB")
+        small.thumbnail((_LLM_MAX_SIDE, _LLM_MAX_SIDE), Image.LANCZOS)
+        buf = io.BytesIO()
+        small.save(buf, "JPEG", quality=90)
+        return buf.getvalue(), "image/jpeg"
+
+
+@router.post("/{doc_id}/extract", response_model=ExtractionResult)
+async def extract_document(doc_id: str):
+    doc = get_document_or_404(doc_id)
+    path = storage.image_path(doc)
+    if not path.is_file():
+        raise HTTPException(404, "Document image is missing from storage")
+    try:
+        provider = providers.get_provider()
+    except ProviderError as e:
+        raise HTTPException(502, str(e))
+
+    image_bytes, media_type = await run_in_threadpool(image_for_llm, path.read_bytes(), doc["media_type"])
+    loop = asyncio.get_running_loop()
+    ocr_result, llm_data = await asyncio.gather(
+        loop.run_in_executor(None, ocr.run_ocr, path),
+        provider.extract(image_bytes, media_type),
+        return_exceptions=True,
+    )
+
+    if isinstance(llm_data, ProviderError):
+        raise HTTPException(502, f"Extraction failed: {llm_data}")
+    if isinstance(llm_data, BaseException):
+        raise llm_data
+
+    warnings: list[str] = []
+    if isinstance(ocr_result, BaseException):
+        logger.error("OCR failed for %s: %s: %s", doc_id, type(ocr_result).__name__, ocr_result)
+        warnings.append("OCR could not run on this document; nothing could be cross-checked.")
+        ocr_result = ocr.OcrResult(text="", words=[])
+
+    data, merge_warnings = extraction.merge(llm_data, ocr_result.text, page=doc["page_number"])
+    result = ExtractionResult(
+        doc_id=doc_id, data=data, ocr_text=ocr_result.text, warnings=warnings + merge_warnings
+    )
+    storage.save_extraction(doc_id, result.model_dump_json())
+    return result
+
+
+@router.get("/{doc_id}/extract", response_model=ExtractionResult)
+def get_extraction(doc_id: str):
+    get_document_or_404(doc_id)
+    raw = storage.get_extraction(doc_id)
+    if raw is None:
+        raise HTTPException(404, "This document has not been extracted yet.")
+    return ExtractionResult.model_validate_json(raw)

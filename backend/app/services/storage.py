@@ -112,3 +112,14 @@ def list_documents() -> list[dict]:
 
 def image_path(doc: dict) -> Path:
     return uploads_dir() / doc["image_name"]
+
+
+def save_extraction(doc_id: str, extraction_json: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE documents SET extraction = ? WHERE doc_id = ?", (extraction_json, doc_id))
+
+
+def get_extraction(doc_id: str) -> str | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT extraction FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
+    return row["extraction"] if row else None
