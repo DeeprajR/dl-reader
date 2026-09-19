@@ -21,14 +21,21 @@ export function fieldDomId(key) {
   return `field-${key.replace('.', '-')}`
 }
 
+// Per-class validity fields, e.g. "lmv_date_of_issue" -> "LMV · Date of issue" (a date input).
+const CLASS_DATE_KEY = /^(.+?)_(date_of_issue|valid_till)$/
+
+function otherField(key, field) {
+  const m = key.match(CLASS_DATE_KEY)
+  if (!m) return { key: `other_fields.${key}`, label: humanize(key), field }
+  const cls = m[1].replace(/_/g, ' ').toUpperCase()
+  const kind = m[2] === 'date_of_issue' ? 'Date of issue' : 'Valid till'
+  return { key: `other_fields.${key}`, label: `${cls} · ${kind}`, kind: 'date', field }
+}
+
 // Every field of a LicenceData as { key, label, kind, field }.
 export function listFields(data) {
   return [
     ...CORE_FIELDS.map((f) => ({ key: f.name, label: f.label, kind: f.kind, field: data[f.name] })),
-    ...Object.keys(data.other_fields).map((k) => ({
-      key: `other_fields.${k}`,
-      label: humanize(k),
-      field: data.other_fields[k],
-    })),
+    ...Object.keys(data.other_fields).map((k) => otherField(k, data.other_fields[k])),
   ]
 }

@@ -77,6 +77,26 @@ def normalize_date(s: str | None) -> str | None:
     return None
 
 
+_DATE_IN_TEXT = re.compile(
+    r"\d{4}[-/. ]\d{1,2}[-/. ]\d{1,2}"
+    r"|\d{1,2} ?[-/.] ?\d{1,2} ?[-/.] ?(?:\d{4}|\d{2})"
+    r"|\d{1,2}(?:st|nd|rd|th)?[ ./-]?[A-Za-z]{3,9}\.?[ ./-]?(?:\d{4}|\d{2})"
+    r"|[A-Za-z]{3,9}\.? \d{1,2}(?:st|nd|rd|th)?,? \d{4}"
+)
+
+
+def find_date(text: str | None) -> str | None:
+    """First date found inside `text` (e.g. "DOI: 16-06-2019" -> "2019-06-16"), or None."""
+    if not text:
+        return None
+    if iso := normalize_date(text):
+        return iso
+    for m in _DATE_IN_TEXT.finditer(text):
+        if iso := normalize_date(m.group()):
+            return iso
+    return None
+
+
 # --- fuzzy matching -------------------------------------------------------------------------
 
 
@@ -172,6 +192,84 @@ def match_bbox_parts(target: str | None, words: list[dict]) -> Box | None:
     return Box(x=left, y=top, w=right - left, h=bottom - top)
 
 
+# --- per-class validity and date order ------------------------------------------------------
+
+# other_fields written per vehicle class, e.g. "lmv_date_of_issue", "mcwg_valid_till".
+CLASS_DATE_KEY = re.compile(r"(?P<cls>[a-z0-9_]+?)_(?P<kind>date_of_issue|valid_till)")
+
+
+def class_date_key(name: str) -> re.Match | None:
+    return CLASS_DATE_KEY.fullmatch(name.removeprefix("other_fields."))
+
+
+def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
+    """Locate a per-class date by its class code (the first word of its row source_text).
+
+    Returns the box of that class's row and whether the value's date is printed on that row.
+    The same dates often repeat on every row, so matching the row text alone can land on the
+    wrong class; anchoring on the code avoids that, and an unreadable code gives no box.
+    """
+    parts = (field.source_text or "").split()
+    if not parts or find_date(parts[0]) or not words:
+        return None, False
+    anchor = match_bbox(parts[0], words)
+    if anchor is None:
+        return None, False
+    row = [w for w in words if anchor.y <= w["top"] + w["height"] / 2 <= anchor.y + anchor.h]
+    confirmed = any(find_date(w["text"]) == field.value for w in row)
+    return match_bbox(field.source_text, row) or anchor, confirmed
+
+
+def _as_date(field: FieldValue | None) -> date | None:
+    try:
+        return date.fromisoformat(field.value) if field and field.value else None
+    except ValueError:
+        return None
+
+
+def check_date_order(data: LicenceData) -> list[str]:
+    """Flag impossible dates for review: birth < issue < expiry (licence and per class), and no
+    birth or issue date in the future. Catches swapped dates whatever caused them."""
+    warnings: list[str] = []
+    today = date.today()
+
+    def flag(message: str, *fields: FieldValue) -> None:
+        warnings.append(message)
+        for field in fields:
+            field.confidence = "review"
+
+    dob, doi, doe = data.date_of_birth, data.date_of_issue, data.date_of_expiry
+    birth, issue, expiry = _as_date(dob), _as_date(doi), _as_date(doe)
+    if birth and birth > today:
+        flag(f"Date of birth ({birth}) is in the future.", dob)
+    if issue and issue > today:
+        flag(f"Date of issue ({issue}) is in the future.", doi)
+    if issue and expiry and issue >= expiry:
+        flag(f"Date of issue ({issue}) is not before the expiry date ({expiry}). Were they swapped?", doi, doe)
+    if birth and issue and birth >= issue:
+        flag(f"Date of birth ({birth}) is not before the date of issue ({issue}).", dob, doi)
+
+    per_class: dict[str, dict[str, FieldValue]] = {}
+    for key, field in data.other_fields.items():
+        if m := class_date_key(key):
+            per_class.setdefault(m["cls"], {})[m["kind"]] = field
+    for cls, pair in per_class.items():
+        label = cls.upper().replace("_", " ")
+        cls_issue, cls_till = pair.get("date_of_issue"), pair.get("valid_till")
+        start, end = _as_date(cls_issue), _as_date(cls_till)
+        if start and start > today:
+            flag(f"{label} date of issue ({start}) is in the future.", cls_issue)
+        if start and end and start >= end:
+            flag(
+                f"{label} date of issue ({start}) is not before its valid-till date ({end}). Were they swapped?",
+                cls_issue,
+                cls_till,
+            )
+        if birth and start and birth >= start:
+            flag(f"Date of birth ({birth}) is not before the {label} date of issue ({start}).", dob, cls_issue)
+    return warnings
+
+
 # --- user edits -----------------------------------------------------------------------------
 
 MAX_VALUE_CHARS = 1000
@@ -188,7 +286,7 @@ def clean_user_data(data: LicenceData) -> LicenceData:
         value = (field.value or "").strip() or None
         if value and len(value) > MAX_VALUE_CHARS:
             raise ValueError(f"{name} is longer than {MAX_VALUE_CHARS} characters")
-        if value and name in DATE_FIELDS:
+        if value and (name in DATE_FIELDS or class_date_key(name)):
             iso = normalize_date(value)
             if iso is None:
                 raise ValueError(f"{name} must be a valid date in YYYY-MM-DD format")
@@ -211,7 +309,8 @@ def merge(
 ) -> tuple[LicenceData, list[str]]:
     """Cross-check every field against OCR: confidence from the text, bbox from word boxes.
 
-    Returns a new LicenceData plus warnings. Null-value fields are always "review" with no box.
+    Per-class dates are anchored on their class's table row, and impossible date orders are
+    flagged. Returns a new LicenceData plus warnings. Null-value fields are always "review".
     """
     data = data.model_copy(deep=True)
     warnings: list[str] = []
@@ -219,14 +318,18 @@ def merge(
     if low_ocr:
         warnings.append(LOW_OCR_WARNING)
 
+    words = words or []
     for name, field in iter_fields(data):
-        is_date = name in DATE_FIELDS
+        per_class = class_date_key(name) is not None
+        is_date = name in DATE_FIELDS or per_class
         field.page = page
         field.confidence = "review"
         field.bbox = None
 
         if is_date and field.value is not None:
-            iso = normalize_date(field.value) or normalize_date(field.source_text)
+            # source_text may carry the printed label ("DOI: 16-06-2019"); a per-class row
+            # holds two dates, so only the value itself is trusted there.
+            iso = find_date(field.value) or (None if per_class else find_date(field.source_text))
             if iso:
                 field.value = iso
             else:
@@ -234,11 +337,17 @@ def merge(
 
         if field.value is None:
             continue
+        if per_class:
+            field.bbox, on_its_row = _class_row(field, words)
+            if on_its_row and not low_ocr:
+                field.confidence = "high"
+            continue
         anchor = field.source_text or field.value
-        field.bbox = match_bbox(anchor, words or []) or match_bbox_parts(anchor, words or [])
+        field.bbox = match_bbox(anchor, words) or match_bbox_parts(anchor, words)
         if low_ocr:
             continue
-        if text_matches_ocr(field.source_text or field.value, ocr_text, is_date=is_date):
+        if text_matches_ocr(anchor, ocr_text, is_date=is_date):
             field.confidence = "high"
 
+    warnings += check_date_order(data)
     return data, warnings

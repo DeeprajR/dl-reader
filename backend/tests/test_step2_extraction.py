@@ -380,10 +380,83 @@ def test_compare_models_prints_diff_table(tmp_path, monkeypatch, capsys):
     assert all(len(p.calls) == 1 for p in providers.values())  # same sample through both models
 
 
-def test_prompt_asks_for_per_class_validity_only_when_printed():
+def test_prompt_names_date_labels_and_asks_for_them_in_the_source():
     from app.services.providers.base import EXTRACTION_USER_PROMPT
 
-    assert "vehicle_class_validity" in EXTRACTION_USER_PROMPT
-    assert "one row per line" in EXTRACTION_USER_PROMPT  # source_text in OCR reading order
-    assert "issued 2019-06-16, valid till 2034-06-15" in EXTRACTION_USER_PROMPT  # dates labelled
-    assert "Omit it if no such table is printed" in EXTRACTION_USER_PROMPT
+    for label in ("DOI / Date of Issue", "Valid Till / Validity", "DOB / Date of Birth"):
+        assert label in EXTRACTION_USER_PROMPT
+    assert "source_text is the printed label together with the date" in EXTRACTION_USER_PROMPT
+
+
+def test_prompt_asks_for_separate_per_class_dates_only_when_printed():
+    from app.services.providers.base import EXTRACTION_USER_PROMPT
+
+    assert '"<class>_date_of_issue" and "<class>_valid_till"' in EXTRACTION_USER_PROMPT
+    assert "table row exactly as printed" in EXTRACTION_USER_PROMPT  # locates the right row
+    assert "Omit them if no such table is printed" in EXTRACTION_USER_PROMPT
+    assert "vehicle_class_validity" not in EXTRACTION_USER_PROMPT
+
+
+@pytest.mark.parametrize(
+    "text, iso",
+    [
+        ("DOI: 16-06-2019", "2019-06-16"),
+        ("Valid Till: 15-06-2034 (NT)", "2034-06-15"),
+        ("Date of Issue : 10-04-2018", "2018-04-10"),
+        (":12-08-1990", "1990-08-12"),
+        ("Issued on 5 Jan 2021", "2021-01-05"),
+        ("no date here", None),
+        (None, None),
+    ],
+)
+def test_find_date_reads_dates_inside_labelled_text(text, iso):
+    from app.services.extraction import find_date
+
+    assert find_date(text) == iso
+
+
+def test_merge_accepts_labelled_date_sources():
+    data = make_licence(
+        date_of_issue=fv("2019-06-16", "DOI : 16-06-2019"),
+        date_of_expiry=fv("not a date", "Valid Till : 15-06-2034"),  # value recovered from the source
+    )
+    merged, warnings = merge(data, CANNED_OCR_TEXT)
+    assert merged.date_of_issue.confidence == "high"
+    assert merged.date_of_expiry.value == "2034-06-15"
+    assert warnings == []
+
+
+# --- date order sanity -----------------------------------------------------------------------
+
+
+def test_swapped_issue_and_expiry_are_flagged():
+    data = make_licence(date_of_issue=fv("2034-06-15", "15-06-2034"), date_of_expiry=fv("2019-06-16", "16-06-2019"))
+    merged, warnings = merge(data, CANNED_OCR_TEXT)
+    assert merged.date_of_issue.confidence == merged.date_of_expiry.confidence == "review"
+    assert any("Were they swapped?" in w for w in warnings)
+    assert merged.full_name.confidence == "high"  # other fields unaffected
+
+
+def test_birth_after_issue_and_future_issue_are_flagged():
+    data = make_licence(date_of_birth=fv("2020-01-01", "01-01-2020"))
+    merged, warnings = merge(data, CANNED_OCR_TEXT)
+    assert merged.date_of_birth.confidence == merged.date_of_issue.confidence == "review"
+    assert any("not before the date of issue" in w for w in warnings)
+
+    merged, warnings = merge(make_licence(date_of_issue=fv("2099-01-01")), CANNED_OCR_TEXT)
+    assert any("in the future" in w for w in warnings)
+    assert merged.date_of_issue.confidence == "review"
+
+
+def test_per_class_dates_are_normalised_and_order_checked():
+    other = {
+        "lmv_date_of_issue": fv("16-06-2019", "LMV 16-06-2019 15-06-2034"),
+        "lmv_valid_till": fv("2034-06-15", "LMV 16-06-2019 15-06-2034"),
+        "mcwg_date_of_issue": fv("2034-06-15", "MCWG 16-06-2019 15-06-2034"),  # swapped
+        "mcwg_valid_till": fv("2019-06-16", "MCWG 16-06-2019 15-06-2034"),
+    }
+    merged, warnings = merge(make_licence(other_fields=other), CANNED_OCR_TEXT)
+    assert merged.other_fields["lmv_date_of_issue"].value == "2019-06-16"
+    assert any(w.startswith("MCWG date of issue") and "swapped" in w for w in warnings)
+    assert not any(w.startswith("LMV") for w in warnings)
+    assert merged.other_fields["mcwg_date_of_issue"].confidence == "review"

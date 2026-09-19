@@ -136,3 +136,33 @@ def test_merge_uses_part_fallback_only_when_whole_value_fails():
     merged, _ = merge(data, "\n".join(TABLE_LINES), words=TABLE_WORDS)
     assert merged.vehicle_classes.bbox == box_of("/MCWG", words=TABLE_WORDS)
     assert merged.vehicle_classes.confidence == "review"  # LMV is still unconfirmed by OCR
+
+
+def row_box(line, words=TABLE_WORDS):
+    """Union box of the non-punctuation words on one synthetic line."""
+    row = [w for w in words if w["line"] == line and w["text"] not in {"|"}]
+    left, top = min(w["left"] for w in row), min(w["top"] for w in row)
+    right, bottom = max(w["left"] + w["width"] for w in row), max(w["top"] + w["height"] for w in row)
+    return Box(x=left, y=top, w=right - left, h=bottom - top)
+
+
+def test_per_class_dates_are_anchored_on_their_own_row():
+    from app.services.extraction import merge
+
+    other = {
+        "mcwg_valid_till": fv("2034-06-15", "MCWG 16-06-2019 15-06-2034"),
+        "mcwg_date_of_issue": fv("2030-01-01", "MCWG 16-06-2019 15-06-2034"),  # not printed on its row
+        "lmv_valid_till": fv("2034-06-15", "LMV 16-06-2019 15-06-2034"),  # LMV cell unreadable
+    }
+    merged, _ = merge(make_licence(other_fields=other), "\n".join(TABLE_LINES), words=TABLE_WORDS)
+    mcwg, wrong, lmv = (merged.other_fields[k] for k in other)
+    assert mcwg.bbox == row_box(2) and mcwg.confidence == "high"  # MCWG row, date on that row
+    assert wrong.bbox == row_box(2) and wrong.confidence == "review"
+    # The LMV row text would fuzzy-match the MCWG row (same dates, shared "M"): no box beats a wrong one.
+    assert lmv.bbox is None and lmv.confidence == "review"
+
+
+def test_labelled_date_source_highlights_label_and_date():
+    from app.services.extraction import match_bbox
+
+    assert match_bbox("DOI: 16-06-2019", CANNED_WORDS) == box_of("DOI", "16-06-2019", words=CANNED_WORDS)

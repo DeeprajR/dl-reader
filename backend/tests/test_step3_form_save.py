@@ -63,6 +63,16 @@ def test_save_rejects_bad_other_field_names_and_shapes(client, extracted):
     assert response.json()["error"].startswith("Invalid request")
 
 
+def test_save_validates_per_class_dates(client, extracted):
+    data = saved_data(client, extracted)
+    data["other_fields"]["lmv_valid_till"] = {**data["other_fields"]["blood_group"], "value": "15/06/2034"}
+    assert client.put(f"/api/documents/{extracted}/data", json=data).json()["other_fields"]["lmv_valid_till"]["value"] == "2034-06-15"
+
+    data["other_fields"]["lmv_valid_till"]["value"] = "someday"
+    response = client.put(f"/api/documents/{extracted}/data", json=data)
+    assert response.status_code == 422 and "lmv_valid_till" in response.json()["error"]
+
+
 def test_save_requires_an_extraction(client, uploaded):
     response = client.put(f"/api/documents/{uploaded}/data", json=make_licence().model_dump())
     assert response.status_code == 404

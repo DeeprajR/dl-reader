@@ -31,9 +31,9 @@ _FIELD = '{"value": string | null, "source_text": string | null}'
 _FIELD_NOTES = {
     "full_name": "holder's full name",
     "licence_number": "driving licence number",
-    "date_of_birth": "value as YYYY-MM-DD",
-    "date_of_issue": "value as YYYY-MM-DD",
-    "date_of_expiry": "value as YYYY-MM-DD (valid till / expiry)",
+    "date_of_birth": "value as YYYY-MM-DD; printed as e.g. DOB / Date of Birth",
+    "date_of_issue": "value as YYYY-MM-DD; printed as e.g. DOI / Date of Issue / Issued on",
+    "date_of_expiry": "value as YYYY-MM-DD; printed as e.g. Valid Till / Validity / Valid Upto / Expiry",
     "address": "full address, may span several lines",
     "vehicle_classes": "authorised vehicle classes, comma-joined if multiple",
     "issuing_authority": "issuing authority / office",
@@ -43,12 +43,17 @@ EXTRACTION_USER_PROMPT = (
     "this shape:\n{\n"
     + "".join(f'  "{name}": {_FIELD},  // {_FIELD_NOTES[name]}\n' for name in CORE_FIELDS)
     + f'  "other_fields": {{ "<descriptive_snake_case_key>": {_FIELD}, ... }}\n}}'
-    # Per-class validity tables have no core field; without this hint models drop the dates.
+    # The printed label shows which date is which, to the reviewer and in the chat excerpts.
+    + "\nFor date_of_birth, date_of_issue and date_of_expiry, source_text is the printed label "
+    'together with the date, exactly as printed (e.g. "DOI: 01-02-2020", "Valid Till: '
+    '31-01-2040").'
+    # Per-class validity has no core field; without this hint models drop the dates.
     + "\nIf the licence prints validity per vehicle class (for example a table of class, issue "
-    "date and valid-till date), also add other_fields.vehicle_class_validity: value like "
-    '"LMV: issued 2019-06-16, valid till 2034-06-15; MCWG: issued 2019-06-16, valid till '
-    '2034-06-15", and source_text the table rows exactly as printed, one row per line. '
-    "Omit it if no such table is printed."
+    "date and valid-till date), add two other_fields for every class: "
+    '"<class>_date_of_issue" and "<class>_valid_till", with the class code in snake_case '
+    "(e.g. lmv_date_of_issue, mcwg_valid_till). Value: that date as YYYY-MM-DD. source_text: "
+    'that class\'s table row exactly as printed (e.g. "LMV 01-02-2020 31-01-2040"). Omit them '
+    "if no such table is printed."
 )
 JSON_RETRY_PROMPT = "Your previous response was not valid JSON. Return only the JSON object."
 
