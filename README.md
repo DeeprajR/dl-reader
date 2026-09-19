@@ -1,24 +1,24 @@
 # AI Driving Licence Reader
 
-Upload a driving licence as a JPG, PNG or PDF, and the app turns it into an editable form shown next to the document. A vision LLM reads the licence while Tesseract OCR reads the same image independently. Every value is cross-checked against the printed text, anything that can't be confirmed is flagged for review, and clicking a field highlights where it is printed. An **Ask the Document** chat answers questions from the licence alone, cites its sources, and replies *"The document does not contain this information."* rather than guess.
+Upload a photo or PDF of a driving licence and get its details in an editable form, shown side by side with the document. Every value is checked against the text printed on the card. Anything that can't be confirmed is marked **Please verify**, and clicking a field shows where it appears on the licence. A chat answers questions about the licence using only the document, and replies *"The document does not contain this information."* when it can't.
 
-The form has nine fields: **Full Name, Driving Licence Number, Date of Birth, Date of Issue, Date of Expiry, Address, Vehicle/Class of Licence, Issuing Authority** and **Other relevant information**. The last one lists everything else found on the card, one `Label: value` line per item, for example `Blood group: O+` or `LMV · Valid till: 2034-06-15`.
+The form has nine fields: Full Name, Driving Licence Number, Date of Birth, Date of Issue, Date of Expiry, Address, Vehicle/Class of Licence, Issuing Authority, and Other relevant information. The last one holds everything else on the card, one item per line.
 
 ---
 
 ## Technology stack
 
-| Layer | Choice |
+| Part | Technology |
 |---|---|
-| Backend | Python 3.11+, FastAPI, uvicorn, pydantic v2 |
-| OCR | Tesseract via `pytesseract` (`image_to_data` for word boxes); NumPy to erase table rulings before OCR |
-| PDF | `pdf2image` + poppler: pages 1–2 (front and back) rendered to one image |
-| LLM | OpenRouter's OpenAI-compatible API through the `openai` SDK. Model set by `LLM_MODEL` (default `google/gemini-3.8-flash`); an optional local model via Ollama |
-| Chat retrieval | `sentence-transformers` `all-MiniLM-L6-v2` embeddings in ChromaDB (in-process, persisted to `./chroma`) |
-| Storage | SQLite, plus uploaded files under `./data/uploads` with server-generated UUID names |
-| Frontend | React 18 + Vite, plain `fetch`, Tailwind CSS |
-| Tests | pytest + FastAPI `TestClient`, with no real LLM or network calls |
-| Container | One multi-stage Dockerfile: a Node build stage, then `python:3.11-slim` with `tesseract-ocr` and `poppler-utils` |
+| Backend | Python 3.11+, FastAPI |
+| Reading printed text (OCR) | Tesseract |
+| Understanding the licence | A vision AI model through OpenRouter (default `google/gemini-3.8-flash`), or a local model through Ollama |
+| PDF support | poppler, via pdf2image |
+| Chat search | sentence-transformers embeddings stored in ChromaDB |
+| Storage | SQLite, plus files on disk |
+| Frontend | React 18, Vite, Tailwind CSS |
+| Tests | pytest |
+| Packaging | Docker |
 
 ---
 
@@ -26,286 +26,232 @@ The form has nine fields: **Full Name, Driving Licence Number, Date of Birth, Da
 
 ```mermaid
 flowchart LR
-    U["Upload<br/>JPG / PNG / PDF"] --> V["Validate type, magic bytes, size<br/>PDF pages 1-2 stacked, EXIF rotation"]
-    V --> W[("Working image")]
-    subgraph P["In parallel (asyncio.gather)"]
-        OCR["Tesseract OCR<br/>text + word boxes"]
-        VLM["Vision LLM<br/>fields + verbatim source_text"]
+    U["Upload<br/>JPG, PNG or PDF"] --> I["Document image"]
+    subgraph P["At the same time"]
+        OCR["OCR<br/>reads the printed text"]
+        AI["Vision AI model<br/>reads the fields"]
     end
-    W --> OCR
-    W --> VLM
-    OCR --> M["Merge<br/>normalise dates<br/>confidence = OCR agreement<br/>bbox = matched word boxes"]
-    VLM --> M
-    M --> F["Review form<br/>sources + highlights"]
-    M --> DB[("SQLite")]
-    OCR --> CH["Chunks<br/>OCR text + one per field"]
-    M --> CH
-    CH --> E[("MiniLM embeddings<br/>in ChromaDB")]
-    Q["Question"] --> R["Top-5 retrieval"]
-    E --> R
-    R --> G["Grounded chat answer<br/>+ cited, highlightable sources"]
+    I --> OCR
+    I --> AI
+    OCR --> C["Cross-check<br/>confirm each field against the printed text<br/>and find where it is on the image"]
+    AI --> C
+    C --> F["Review form<br/>with sources and highlights"]
+    OCR --> X[("Search index<br/>document text + extracted fields")]
+    C --> X
+    Q["Question"] --> S["Find the 5 most relevant passages"]
+    X --> S
+    S --> A["Answer with cited sources"]
 ```
 
-The chat is grounded in four tiers, and each tier can end a request with the exact refusal:
+The chat only answers from the document. Two checkpoints let it refuse instead of guessing:
 
 ```mermaid
 flowchart TD
-    Q["Question (max 1000 chars)"] --> T1{"Tier 1: retrieval gate<br/>any chunk within cosine distance 0.9?"}
-    T1 -- no --> REF["The document does not contain this information."]
-    T1 -- yes --> T2["Tier 2: grounded prompt<br/>answer only from the excerpts,<br/>quote the supporting text"]
-    T2 --> T3{"Tier 3: refusal check<br/>does the reply begin with the refusal?"}
-    T3 -- yes --> REF
-    T3 -- no --> T4["Tier 4: answer + cited sources<br/>each highlightable on the image"]
+    Q["Question"] --> G1{"Is anything relevant<br/>in the document?"}
+    G1 -- no --> R["The document does not contain this information."]
+    G1 -- yes --> G2["The AI answers only from those passages<br/>and quotes them"]
+    G2 --> G3{"Did the AI say it can't answer?"}
+    G3 -- yes --> R
+    G3 -- no --> G4["Answer + sources<br/>each can be highlighted on the document"]
 ```
 
-**How a document flows through the app:**
+**How it works**
 
-1. **Upload.** The file is validated by extension, magic bytes and size (at most 10 MB), and stored under a UUID name. Phone-photo rotation is applied to the pixels, and a PDF's first two pages are stacked into one working image.
-2. **Extract.** Tesseract (in a thread executor) and the vision LLM run at the same time. The LLM returns every field with the exact text it read (`source_text`). The merge step then:
-   - normalises dates to YYYY-MM-DD;
-   - marks each field `high` or `review` by comparing it with the OCR text;
-   - matches each field to OCR word boxes for its highlight.
-   The result is saved, so reopening a document never re-runs extraction.
-3. **Review.** The form shows each field with its source and a clickable highlight, both ways: click a field to see it on the image, or a highlight to jump to its field. Saving an edit updates the chat's index too.
-4. **Chat.** The OCR text and the extracted fields are indexed as ~200-character chunks. A question retrieves the top 5, and the answer is grounded in them.
+1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name. For a PDF, the first two pages (front and back) are used.
+2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify.
+3. **Review.** Edit and save the form. Click a field to see it on the document, or click a highlight to jump to its field.
+4. **Chat.** Each answer is built only from passages found in the document, and lists them as sources.
 
-| Endpoint | Purpose |
+| API endpoint | What it does |
 |---|---|
-| `GET /api/documents` | List uploads |
-| `POST /api/documents` | Upload a file → `201 {doc_id}`; invalid → `400 {"error": ...}` |
-| `GET /api/documents/{id}/image` · `/meta` | The working image · its pixel size |
-| `POST /api/documents/{id}/extract` | Run OCR and the LLM, merge, save → `ExtractionResult` |
-| `GET /api/documents/{id}/extract` | The saved result (404 if never extracted) |
-| `PUT /api/documents/{id}/data` | Save edited fields (validated) |
-| `POST /api/documents/{id}/chat` | `{question}` → `{answer, sources: [{text, origin, bbox}]}` |
-
-Every error comes back as JSON `{"error": "..."}` with a readable message, never a stack trace.
-
-```
-backend/app/main.py                  app setup, startup checks, JSON errors, serves the built frontend
-backend/app/routes/                  documents.py (upload, extract, save), chat.py
-backend/app/services/ocr.py          Tesseract wrapper (text + word boxes, table rulings erased)
-backend/app/services/extraction.py   dates, confidence, highlight matching, date-order checks
-backend/app/services/providers/      provider Protocol + factory; OpenRouter and Ollama providers
-backend/app/services/rag.py          chunk, embed, retrieve, answer
-backend/app/services/storage.py      SQLite + file storage
-backend/scripts/compare_models.py    side-by-side model comparison
-backend/tests/                       pytest suite, marked by build phase and step
-frontend/src/                        React app: document list, upload, workspace (form + chat)
-```
+| `GET /api/documents` | List uploaded documents |
+| `POST /api/documents` | Upload a document |
+| `GET /api/documents/{id}/image` | The document image |
+| `POST /api/documents/{id}/extract` | Read the document and fill the form |
+| `GET /api/documents/{id}/extract` | The saved form, so reopening doesn't re-read the document |
+| `PUT /api/documents/{id}/data` | Save your edits |
+| `POST /api/documents/{id}/chat` | Ask a question |
 
 ---
 
 ## Setup/run instructions
 
-You need **Python 3.11+**, **Node.js 20.19+**, **Tesseract**, **poppler** and an **OpenRouter API key**. After the one-time setup, running the app takes two commands, or a single `docker run`.
+You need **Python 3.11+**, **Node.js 20.19+** and an **OpenRouter API key** (<https://openrouter.ai/keys>).
 
 ### 1. Install Tesseract and poppler
 
-**macOS**
+- **macOS:** `brew install tesseract poppler`
+- **Ubuntu/Debian:** `sudo apt install tesseract-ocr poppler-utils`
+- **Windows:** either install the **UB Mannheim** build of Tesseract (<https://github.com/UB-Mannheim/tesseract/wiki>) and a **poppler-windows** release (<https://github.com/oschwartz10612/poppler-windows/releases>), or run `conda install -c conda-forge tesseract poppler`.
 
-```bash
-brew install tesseract poppler
-```
-
-**Ubuntu / Debian**
-
-```bash
-sudo apt install tesseract-ocr poppler-utils
-```
-
-**Windows**: either of these:
-
-- Install the **UB Mannheim** Tesseract build (<https://github.com/UB-Mannheim/tesseract/wiki>) and a **poppler-windows** release (<https://github.com/oschwartz10612/poppler-windows/releases>).
-- Or use conda: `conda install -c conda-forge tesseract poppler`.
-
-The Windows installers usually don't add the tools to `PATH`. In that case, point to them in `.env` (next step):
+If the tools aren't on your `PATH` (common on Windows), add their locations to `.env` in step 2:
 
 ```ini
 TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
 POPPLER_PATH=C:\path\to\poppler\Library\bin
 ```
 
-Both settings are optional; left empty, the tools are looked up on `PATH`. If a configured path doesn't exist, the app logs a warning and falls back to `PATH`, so the same `.env` also works inside Docker.
+### 2. Add your settings
 
-### 2. Create `.env` with your OpenRouter key
-
-Copy the template to the **repository root** and add a key from <https://openrouter.ai/keys>:
+In the project folder, copy the example settings file, then paste your key after `OPENROUTER_API_KEY=`:
 
 ```bash
 cp backend/.env.example .env        # Windows: copy backend\.env.example .env
 ```
 
-```ini
-OPENROUTER_API_KEY=sk-or-...               # required: the server won't start without it (unless both models run on Ollama)
-LLM_MODEL=google/gemini-3.8-flash          # extraction model; also used for chat unless LLM_CHAT_MODEL is set
-LLM_MODEL_ALT=anthropic/claude-sonnet-5    # used only by scripts/compare_models.py
-LLM_CHAT_MODEL=                            # optional separate chat model
-MAX_UPLOAD_MB=10
-TESSERACT_CMD=
-POPPLER_PATH=
-```
+| Setting | Meaning |
+|---|---|
+| `OPENROUTER_API_KEY` | Your OpenRouter key (required) |
+| `LLM_MODEL` | AI model that reads the licence (default `google/gemini-3.8-flash`) |
+| `LLM_CHAT_MODEL` | Optional different model for the chat |
+| `LLM_MODEL_ALT` | Second model, used only by the comparison script (default `anthropic/claude-sonnet-5`) |
+| `MAX_UPLOAD_MB` | Largest file you can upload (default 10) |
+| `TESSERACT_CMD`, `POPPLER_PATH` | Only needed if the tools aren't on your `PATH` |
 
-`.env` is git-ignored. The key stays on the server: it is never sent to the browser and never logged.
+`.env` is never committed, and your key never leaves the server.
 
-### 3. Run the backend
+### 3. Start the backend (first terminal)
 
 ```bash
 cd backend
-python -m venv .venv
+python -m venv .venv                 # once: create a virtual environment
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+pip install -r requirements.txt      # once: install the packages
+uvicorn app.main:app --port 8000
 ```
 
-On first start, the embedding model (~90 MB) downloads once, in the background.
+In every new terminal, run the `activate` line again before using `python`, `pytest` or `uvicorn`. Otherwise your system Python won't find the packages.
 
-### 4. Run the frontend
+### 4. Start the frontend (second terminal)
 
 ```bash
 cd frontend
-npm install
-npm run dev                          # http://localhost:5173 (proxies /api to the backend on :8000)
+npm install                          # once
+npm run dev
 ```
 
 Open <http://localhost:5173>.
 
 ### 5. Run the tests
 
+In the `backend` folder, with the virtual environment activated:
+
 ```bash
-cd backend
-pytest                  # whole suite, about 15 s
-pytest -m phase1        # the core app (build steps 1-5)
-pytest -m step4         # a single build step (step1 ... step10)
+pytest
 ```
 
-The suite makes no real LLM or network calls:
-- **Extraction** uses a fake provider injected through the provider factory.
-- **Embeddings** are deterministic fakes.
-- **ChromaDB** runs in memory.
-- **OCR tests** use the real Tesseract binary, and are skipped if it isn't installed.
+The tests don't call the AI model or the internet, and take about 15 seconds.
 
-### 6. Run with Docker
+### 6. Or run everything with Docker
 
 ```bash
 docker build -t licence-reader . && docker run -p 7860:7860 --env-file .env licence-reader
 ```
 
-Open <http://localhost:7860>. One container serves both the API and the built frontend.
+Open <http://localhost:7860>.
 
-### Optional: a fully local model with Ollama (no personal data leaves the machine)
+### Optional: run the AI model on your own computer (Ollama)
+
+To keep documents entirely on your machine, install [Ollama](https://ollama.com), download a vision model, and set `LLM_MODEL=ollama/qwen2.5vl:3b` in `.env`:
 
 ```bash
 ollama pull qwen2.5vl:3b
 ```
 
-Then set `LLM_MODEL=ollama/qwen2.5vl:3b` in `.env`.
-- **Everything stays local.** Extraction and chat both run on the local model, so no image, OCR text or chat excerpt leaves the machine, and no OpenRouter key is needed.
-- **Server address.** The app finds Ollama through Ollama's own `OLLAMA_HOST` setting (default `http://127.0.0.1:11434`). From inside Docker, use `OLLAMA_HOST=http://host.docker.internal:11434`.
-- **Speed.** A vision model on CPU typically takes 30–60 s per licence, and the first request also loads the model. Ollama calls therefore get a 300 s timeout.
+- **No key needed.** You don't need an OpenRouter key in this setup.
+- **Ollama elsewhere.** If Ollama runs somewhere else (for example, if the app runs in Docker), set `OLLAMA_HOST`, e.g. `http://host.docker.internal:11434`.
+- **Speed.** Without a GPU, expect 30–60 seconds per licence.
 
-### Optional: compare two models
+### Optional: compare two AI models
+
+In the `backend` folder, with the virtual environment activated:
 
 ```bash
-cd backend
-python scripts/compare_models.py     # every file in ./samples, through LLM_MODEL and LLM_MODEL_ALT
+python scripts/compare_models.py
 ```
 
-It prints a field-by-field table per document (`field | model A | model B | agree?`), each model's count of empty fields, and total latency. It has no pass/fail logic; the output is for a person to judge.
+It reads the licences in the `samples/` folder with both `LLM_MODEL` and `LLM_MODEL_ALT`, and prints their answers side by side.
 
 ### Deployment
 
-- **Dockerfile.** The multi-stage Dockerfile produces one image that serves everything, running as a non-root user. It listens on port **7860**; change it with the `PORT` environment variable.
-- **Cold starts:** the image is about 3 GB (CPU PyTorch, ChromaDB and the baked-in embedding model), so the first pull takes a while. After that the server starts in seconds.
-- **Network:** the container needs outbound HTTPS to `openrouter.ai`, unless it uses a local Ollama model.
+The Dockerfile builds a single image, about 3 GB, that serves the whole app on port 7860. You can change the port with the `PORT` setting. The first download of the image takes a while; after that the app starts in seconds. The app needs internet access to reach OpenRouter, unless you use Ollama.
 
 ---
 
 ## AI/LLM approach
 
-### Why a vision LLM *and* OCR
+### Why an AI model and OCR together
 
-Each of the usual approaches fails in its own way:
+Driving licence layouts vary a lot between states and countries, and the common approaches each fall short:
 
-- **OCR with rules or regex** breaks across layouts. Labels move, values wrap and tables differ from state to state, and OCR alone can't tell which number is the licence number.
-- **Cloud ID processors** (AWS Textract AnalyzeID, Google Document AI) handle the ID types they support, but coverage outside those (for example, Indian state licences) is limited. They also tie the design to one vendor, and still send the image to a third party.
-- **A self-hosted model only** keeps all data local, but on typical hardware it is slower and reads less reliably. So it is offered as an option (Ollama), not forced as the default.
-- **A vision LLM alone** copes with any layout, but when it's wrong it is *confidently* wrong: a plausible licence number that isn't on the card.
+- **Fixed rules on top of OCR** break as soon as the layout changes.
+- **Cloud ID-reading services** support only certain ID types (not, for example, Indian state licences) and tie you to one vendor.
+- **A local AI model only** keeps data private, but is slower and less accurate. That's why it's an option here, not the default.
+- **An AI model alone** handles any layout, but when it's wrong it's *confidently* wrong.
 
-### Hallucination versus recognition errors
+So the app uses both: the AI model reads the licence, and OCR checks it.
 
-The two engines fail differently. **OCR** makes *recognition* errors: a misread character, or a table cell it didn't read at all. These are visible and local, and OCR never invents a field. **A vision LLM** reads difficult print well, but can *hallucinate*: fill a gap, infer a value that isn't printed, or reword what is. The app uses each to check the other:
+### Two kinds of mistakes
 
-1. **Evidence first.** The prompt asks for `source_text`, exactly what is printed, next to every value, and tells the model to return null rather than guess: *"A wrong licence number is worse than a null."*
-2. **Independent cross-check.** Each field's `source_text` is compared with Tesseract's text, by exact match, a difflib sliding window (ratio ≥ 0.85), or digits only for dates. A field that matches is `high`; anything else is flagged "Please verify". An invented value has nothing printed to match, so it can't come out `high`.
-3. **Which date is which.** The model maps labels such as "DOI" or "Valid Till" to fields by meaning, and the prompt names the common labels for each date. The printed label is kept in the source (`Source: DOI: 16-06-2019`), so a reviewer can see where each date came from. A mix-up would still pass the OCR check, because both dates are printed. So a separate check flags impossible orders: birth before issue before expiry, for the licence and for each vehicle class, and no issue or birth date in the future.
-4. **Grounding the reviewer can see.** Every field shows its source text, and most can be highlighted on the image, so checking a field takes a glance.
-5. **Fail-safe defaults.** Empty fields are always "Please verify". If OCR finds fewer than 20 characters, every field is flagged, because the cross-check can't be trusted.
+OCR can misread a character, but it never invents anything. An AI model reads well, but can *make things up*: a value that isn't on the card. The app guards against this in four ways:
 
-### Grounded chat with retrieval
+1. **Copied text.** The AI must copy, word for word, the text it used for each value, and leave a field empty rather than guess.
+2. **Cross-check.** That copied text is compared with what OCR read. Only matching fields are confirmed; a made-up value has nothing to match, so it's always marked Please verify.
+3. **Date checks.** Dates must make sense (birth before issue, issue before expiry), which catches swapped dates.
+4. **Visible sources.** Every field shows the text it came from and where it is on the document, so checking takes a glance.
 
-A licence is a few hundred characters, so retrieval is technically overkill: the whole card would fit in the prompt. It's implemented anyway:
-- **It's a real RAG pipeline:** chunk, embed, retrieve, answer from excerpts, cite sources.
-- **It powers the first grounding tier:** a question with no relevant chunk is refused before any LLM call.
-- **Every cited excerpt has provenance:** where it came from (OCR text or an extracted field), plus a box on the image.
-- **It scales unchanged to multi-page documents.**
+### Chat
 
-The index holds OCR text in ~200-character chunks of whole lines with a one-line overlap, one chunk per extracted field (e.g. `Field: licence_number = MH12 20190001234 (source: 'MH12 20190001234')`), and one summary of every vehicle class's dates. The summary lets a question about *all* classes be answered despite top-5 retrieval.
+A licence is short enough to hand to the AI model whole, so searching it first isn't strictly necessary. The chat does it anyway because:
+- it can refuse questions the document can't answer before asking the AI;
+- every answer can point to its exact sources;
+- the same design works for longer documents.
 
 ### Model choice
 
-The app works with any model: `LLM_MODEL` accepts any OpenRouter model that takes image input, with no code changes. The default was chosen by running both sample licences through **`google/gemini-3.8-flash`** and **`anthropic/claude-sonnet-5`** with `scripts/compare_models.py`:
+Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. The default was chosen by reading both sample licences with `google/gemini-3.8-flash` and `anthropic/claude-sonnet-5`, using `scripts/compare_models.py`:
 
 | | gemini-3.8-flash | claude-sonnet-5 |
 |---|---|---|
-| Core fields correct (8 per card × 2) | **16 / 16** | **16 / 16** |
-| Values not printed on the card | **none** | 1 (`country: India`, with no source text) |
-| Values copied verbatim from the card | yes | sometimes reworded (`state: Delhi` from "GOVERNMENT OF … DELHI") |
-| Latency, two cards | 28.5 s | 22.5 s |
-| Price per 1M tokens (input / output) | **$0.75 / $3.75** | $2.00 / $10.00 |
+| Main fields correct | 16 of 16 | 16 of 16 |
+| Values made up | none | 1 (a country not printed on the card) |
+| Cost per million tokens (input / output) | $0.75 / $3.75 | $2.00 / $10.00 |
 
-**`google/gemini-3.8-flash` is the default.** Accuracy on the core fields was identical, and every disagreement was in optional extra fields. Gemini invented nothing and copied values exactly as printed, which the OCR cross-check and highlighting depend on. It also costs about 2.7× less, at similar speed (8–15 s per card).
+**`google/gemini-3.8-flash` is the default.** It was just as accurate, made nothing up, copied text exactly as printed, and costs about a third as much.
 
 ---
 
 ## Key technical decisions
 
-| Decision | Alternatives considered | Rationale |
+| Decision | Alternatives considered | Why |
 |---|---|---|
-| Vision LLM cross-checked by local Tesseract OCR | OCR + rules; cloud ID processors; LLM alone | Handles any layout, and confidence comes from two independent readers agreeing, not from the model grading itself |
-| OCR and LLM run in parallel | One after the other | Wait time is the slower of the two, not their sum; OCR (~1–2 s) is hidden behind the LLM call |
-| Confidence = agreement with OCR text | The LLM's own confidence score | Models' self-reported confidence is poorly calibrated; agreement with OCR can be checked and explained |
-| Highlights from OCR word boxes matched to `source_text` | Asking the LLM for coordinates | LLM coordinates are unreliable; OCR boxes are exact pixels, and a miss just means no highlight |
-| Date-order check on top of the OCR check | Trusting the model's label mapping | The OCR check proves a date is printed, not which label it belongs to; a swap would otherwise go unnoticed |
-| Table rulings erased before OCR | Other Tesseract layout modes; OpenCV | Tesseract drops whole rows of ruled tables, and no layout mode fixed that on every card. Erasing thin straight lines recovered every row, including a cell nothing else could read, while keeping solid title banners |
-| Per-class dates located by their exact class label, rows found by position | Fuzzy or first-word matching | Similar codes (LMV / LMV TR, MCWG / MCWOG) and repeated dates would otherwise land on the wrong row; if in doubt there's no highlight, never a wrong one |
-| OpenRouter through the `openai` SDK, model from `.env` | One SDK per vendor | One integration, any model swappable by a setting, and a fair side-by-side comparison |
-| Provider interface + factory; `ollama/…` runs locally | One hard-wired provider | The fully local option is one setting away; prompt, parsing and retry logic are shared |
-| JSON-only prompt, parse, one retry | Strict JSON-schema mode | Schema-mode support varies between providers behind OpenRouter; the parser also accepts code fences and loose shapes |
-| 60 s timeout and one retry (timeouts, rate limits, server errors, bad JSON) | SDK automatic retries | Predictable behaviour; key, credit and model errors fail fast with a clear message |
-| PDFs: pages 1–2 stacked into one image | First page only; a multi-page viewer | Two-sided licences are often scanned as two pages; one image keeps OCR, highlights and the viewer unchanged |
-| Nine-field form; extras as editable `Label: value` lines | One input per extracted item | A fixed, predictable form, while each item keeps its own source, confidence and highlight behind the scenes |
-| Four-tier grounded chat with exact refusal | Prompt only | The refusal must be exactly the required sentence, and irrelevant excerpts never reach the model |
-| SQLite + files on disk, UUID names, magic-byte checks | External database; object storage | No infrastructure to run; client filenames are never used as paths |
-| One container serving API and frontend | Separate frontend hosting + CORS | One port and origin; the relative `/api` path works everywhere |
-| CPU-only PyTorch, embedding model baked in, non-root user | Default PyTorch wheels; downloading at runtime | Avoids ~2 GB of GPU libraries, works offline, and the container doesn't run as root |
-| Tests with a fake provider, fake embeddings and in-memory Chroma | Tests against a live model | Fast (~15 s), repeatable and offline; each build step can be checked on its own |
+| AI model checked by OCR | OCR with fixed rules; cloud ID services; AI model alone | Works on any layout, and a field is confirmed only when two independent readers agree |
+| OCR and the AI run at the same time | One after the other | Faster: you wait for the slower of the two, not both |
+| Highlights use OCR's word positions | Asking the AI where things are | The AI's positions are unreliable; OCR's are exact |
+| Table lines are erased before OCR | Other OCR settings | OCR skips rows in tables with ruled lines; erasing the lines fixed this on every test card |
+| Dates are checked for order | Trusting the AI to match each label to the right date | OCR can confirm a date is printed, but not which label it belongs to |
+| Any model through OpenRouter, chosen in `.env` | A separate integration for each AI vendor | Switch models without changing code; Ollama for a local model |
+| The first two PDF pages form one image | First page only | Two-sided licences are often scanned as two pages |
+| A fixed nine-field form | One box per detail found | The form stays the same for every licence; extra details go on their own lines |
+| SQLite and files on disk | A separate database server | Nothing extra to install or run |
+| One Docker container for everything | Separate frontend and backend hosting | One command to run, the same everywhere |
+| Tests use a fake AI model | Testing against the real model | Fast, free and repeatable, with no internet needed |
 
 ---
 
 ## Known limitations
 
-- **Confidence means agreement, not truth.** If the LLM and OCR both misread a value the same way, it is marked `high`. Human review of the form is still part of the workflow.
-- **Highlights depend on OCR.** Stylised fonts, busy backgrounds, dotted table lines or text touching the lines can stop a field from being located. The field then shows its source text without a highlight, and never a wrong one. Very short codes (1–2 characters, like `A` or `C1`) in a list can't be confirmed on their own, so such values stay "Please verify".
-- **Personal data and third parties (PII).** By default, images and chat excerpts go through OpenRouter to the underlying model provider. This is mitigated by OpenRouter's zero-data-retention / no-training setting, which is enabled on the account. The Ollama option keeps everything on the machine. OCR, embeddings and retrieval always run locally.
-- **Two-sided licences.** Both sides in one image (side by side or stacked) work, as do the first two pages of a PDF. Front and back uploaded as two separate files become two separate documents, and PDF pages after the second are ignored. A composite image gives each side fewer pixels, so low-resolution scans read less reliably.
-- **Chat.** Retrieval returns the top 5 excerpts, and each question is answered on its own, with no conversation memory. Small local models tend to over-refuse (safe, but less helpful).
-- **Speed.** An extraction takes 8–15 s with the default model. With Ollama on modest hardware, the first request after the model loads can take minutes.
-- **No authentication or multiple users.** Anyone who can reach the server can see every upload. Run it locally or behind your own access control.
-- **Data is session-scoped by design.** Uploads, results and the chat index live in `./data` and `./chroma` in the running instance. A container without a volume loses them when it's removed.
+- **Confirmed doesn't mean certain.** "Confirmed" means OCR and the AI agree. If both misread the same text, it won't be caught, so always review the form.
+- **Some fields can't be highlighted.** Highlights depend on OCR: unusual fonts, busy backgrounds or dotted table lines can stop a field from being found. It then shows its source text without a highlight.
+- **Personal data (PII).** With the default setup, images and chat questions are sent through OpenRouter to the AI provider. OpenRouter's zero-data-retention setting is enabled on the account. For fully local processing, use Ollama; OCR and chat search always run locally.
+- **Two-sided licences.** Both sides in one image, or a two-page PDF, work. Front and back uploaded as two separate files are treated as two documents, and PDF pages after the second are ignored.
+- **No chat memory.** The chat answers each question on its own, without remembering earlier ones.
+- **Reading time.** Reading a licence takes about 8–15 seconds with the default model.
+- **No login.** Anyone who can open the app can see all uploads, so run it locally.
+- **No long-term storage.** Data stays in the app's local folders (`data/` and `chroma/`). A Docker container loses it when the container is removed.
 
 ---
 
 ## AI development tools used
 
-- **Claude Code** (Anthropic's agentic coding tool, in VS Code) with **Claude Opus 5**. It was used to implement the backend, frontend, tests and Dockerfile, to run the model comparison, and to verify each build step in a real browser with Playwright scripts.
+- **Claude Code** with **Claude Opus 5**. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.
