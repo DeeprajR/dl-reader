@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
-from app.routes import documents  # noqa: E402
+from app.routes import chat, documents  # noqa: E402
 from app.services import storage  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -63,6 +63,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(documents.router)
+app.include_router(chat.router)
 
 # Serve the built frontend (Docker / production) when present. Registered last so /api wins.
 if FRONTEND_DIST.is_dir():

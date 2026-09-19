@@ -2,9 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import DocumentViewer from '../components/DocumentViewer.jsx'
 import ExtractedForm from '../components/ExtractedForm.jsx'
+import ChatPanel from '../components/ChatPanel.jsx'
 import ErrorMessage from '../components/ErrorMessage.jsx'
 
-const TABS = [{ id: 'form', label: 'Extracted form' }]
+const TABS = [
+  { id: 'form', label: 'Extracted form' },
+  { id: 'chat', label: 'Ask the document' },
+]
 
 export default function DocumentWorkspace({ docId }) {
   const [info, setInfo] = useState(null) // { meta, label }
@@ -71,6 +75,9 @@ export default function DocumentWorkspace({ docId }) {
           {/* Panels stay mounted so unsaved edits survive tab switches. */}
           <div role="tabpanel" hidden={tab !== 'form'}>
             <ExtractedForm docId={docId} />
+          </div>
+          <div role="tabpanel" hidden={tab !== 'chat'}>
+            <ChatPanel docId={docId} />
           </div>
         </section>
       </div>

@@ -43,5 +43,6 @@ export const api = {
   getExtraction: (docId) => request(`/documents/${docId}/extract`),
   runExtraction: (docId) => request(`/documents/${docId}/extract`, { method: 'POST' }),
   saveData: (docId, data) => request(`/documents/${docId}/data`, json('PUT', data)),
+  chat: (docId, question) => request(`/documents/${docId}/chat`, json('POST', { question })),
   imageUrl: (docId) => `${API}/documents/${docId}/image`,
 }

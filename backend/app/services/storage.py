@@ -5,6 +5,7 @@ Layout under the data directory (default ./data, relative to the working dir):
   uploads/<uuid>.*   uploaded originals and working images (server-generated names only)
 """
 
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS documents (
     width           INTEGER NOT NULL,
     height          INTEGER NOT NULL,
     uploaded_at     TEXT NOT NULL,
-    extraction      TEXT               -- JSON ExtractionResult; NULL until extracted
+    extraction      TEXT,              -- JSON ExtractionResult; NULL until extracted
+    ocr_words       TEXT               -- JSON Tesseract word boxes from the last extraction
 )
 """
 
@@ -37,6 +39,9 @@ def init(data_dir: Path | str | None = None) -> None:
     uploads_dir().mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.execute(_SCHEMA)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)")}
+        if "ocr_words" not in columns:  # databases created before word boxes were stored
+            conn.execute("ALTER TABLE documents ADD COLUMN ocr_words TEXT")
 
 
 def uploads_dir() -> Path:
@@ -114,9 +119,22 @@ def image_path(doc: dict) -> Path:
     return uploads_dir() / doc["image_name"]
 
 
-def save_extraction(doc_id: str, extraction_json: str) -> None:
+def save_extraction(doc_id: str, extraction_json: str, ocr_words: list[dict] | None = None) -> None:
+    """Persist the extraction; `ocr_words` is replaced only when given (user edits keep it)."""
     with _connect() as conn:
-        conn.execute("UPDATE documents SET extraction = ? WHERE doc_id = ?", (extraction_json, doc_id))
+        if ocr_words is None:
+            conn.execute("UPDATE documents SET extraction = ? WHERE doc_id = ?", (extraction_json, doc_id))
+        else:
+            conn.execute(
+                "UPDATE documents SET extraction = ?, ocr_words = ? WHERE doc_id = ?",
+                (extraction_json, json.dumps(ocr_words), doc_id),
+            )
+
+
+def get_ocr_words(doc_id: str) -> list[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT ocr_words FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
+    return json.loads(row["ocr_words"]) if row and row["ocr_words"] else []
 
 
 def get_extraction(doc_id: str) -> str | None:

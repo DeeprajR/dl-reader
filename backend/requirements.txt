@@ -7,5 +7,7 @@ pillow==12.3.0
 pdf2image==1.17.0
 pytesseract==0.3.13
 openai==3.16.0
+chromadb==1.5.9
+sentence-transformers==6.1.0
 pytest==9.1.1
 httpx==0.28.1

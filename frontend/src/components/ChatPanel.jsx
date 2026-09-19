@@ -1,0 +1,133 @@
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../api.js'
+
+const MAX_CHARS = 1000
+const ORIGIN_LABELS = { ocr_text: 'Document text', extracted_fields: 'Extracted field' }
+
+function Sources({ sources }) {
+  if (!sources.length) return null
+  return (
+    <details className="group mt-2">
+      <summary className="cursor-pointer select-none text-xs font-medium text-blue-700 hover:underline">
+        Sources ({sources.length})
+      </summary>
+      <ol className="mt-2 space-y-2">
+        {sources.map((s, i) => (
+          <li key={i} className="rounded-md bg-white px-3 py-2 text-xs ring-1 ring-slate-200">
+            <span className="mb-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
+              {ORIGIN_LABELS[s.origin] ?? s.origin}
+            </span>
+            <p className="whitespace-pre-line text-slate-700">{s.text}</p>
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
+function Message({ message }) {
+  if (message.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-blue-700 px-4 py-2 text-sm text-white">
+          {message.text}
+        </div>
+      </div>
+    )
+  }
+  if (message.role === 'error') {
+    return (
+      <div role="alert" className="max-w-[85%] rounded-2xl rounded-bl-sm bg-red-50 px-4 py-2 text-sm text-red-900 ring-1 ring-red-200">
+        {message.text}
+      </div>
+    )
+  }
+  return (
+    <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-100 px-4 py-2 text-sm text-slate-900">
+      <p className="whitespace-pre-wrap">{message.text}</p>
+      <Sources sources={message.sources} />
+    </div>
+  )
+}
+
+export default function ChatPanel({ docId }) {
+  const [messages, setMessages] = useState([])
+  const [question, setQuestion] = useState('')
+  const [pending, setPending] = useState(false)
+  const bottomRef = useRef(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [messages, pending])
+
+  async function ask(e) {
+    e?.preventDefault()
+    const text = question.trim()
+    if (!text || pending) return
+    setMessages((m) => [...m, { role: 'user', text }])
+    setQuestion('')
+    setPending(true)
+    try {
+      const res = await api.chat(docId, text)
+      setMessages((m) => [...m, { role: 'assistant', text: res.answer, sources: res.sources }])
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'error', text: `Could not get an answer: ${err.message}` }])
+      setQuestion(text) // keep the question so it can be re-sent
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="flex h-[min(70vh,44rem)] flex-col">
+      <div className="flex-1 space-y-3 overflow-y-auto p-6" aria-live="polite">
+        {messages.length === 0 && (
+          <div className="text-sm text-slate-500">
+            <p>Ask a question about this licence. Answers come only from the document and cite their sources.</p>
+            <p className="mt-2">For example: “What is the licence expiry date?”</p>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <Message key={i} message={m} />
+        ))}
+        {pending && (
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500" />
+            Reading the document…
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <form onSubmit={ask} className="border-t border-slate-200 p-4">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) ask(e)
+            }}
+            disabled={pending}
+            maxLength={MAX_CHARS}
+            rows={2}
+            placeholder={pending ? 'Waiting for the answer…' : 'Ask about this licence…'}
+            aria-label="Question"
+            className="block w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-50 disabled:text-slate-400"
+          />
+          <button
+            type="submit"
+            disabled={pending || !question.trim()}
+            className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            Ask
+          </button>
+        </div>
+        {question.length > MAX_CHARS - 100 && (
+          <p className="mt-1 text-right text-xs text-slate-500">
+            {question.length}/{MAX_CHARS}
+          </p>
+        )}
+      </form>
+    </div>
+  )
+}

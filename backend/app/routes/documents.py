@@ -5,7 +5,7 @@ import os
 import re
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pdf2image import convert_from_bytes
@@ -13,7 +13,7 @@ from pdf2image.exceptions import PDFInfoNotInstalledError
 from PIL import Image, ImageOps
 
 from app.schemas import DocumentSummary, ExtractionResult, ImageMeta, LicenceData, UploadResponse
-from app.services import extraction, ocr, storage
+from app.services import extraction, ocr, rag, storage
 from app.services.providers import base as providers
 from app.services.providers.base import ProviderError
 
@@ -177,7 +177,7 @@ def image_for_llm(data: bytes, media_type: str) -> tuple[bytes, str]:
 
 
 @router.post("/{doc_id}/extract", response_model=ExtractionResult)
-async def extract_document(doc_id: str):
+async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
     doc = get_document_or_404(doc_id)
     path = storage.image_path(doc)
     if not path.is_file():
@@ -210,7 +210,8 @@ async def extract_document(doc_id: str):
     result = ExtractionResult(
         doc_id=doc_id, data=data, ocr_text=ocr_result.text, warnings=warnings + merge_warnings
     )
-    storage.save_extraction(doc_id, result.model_dump_json())
+    storage.save_extraction(doc_id, result.model_dump_json(), ocr_words=ocr_result.words)
+    background_tasks.add_task(rag.index_document_safely, doc_id, result)
     return result
 
 
@@ -228,11 +229,13 @@ def get_extraction(doc_id: str):
 
 
 @router.put("/{doc_id}/data", response_model=LicenceData)
-def save_data(doc_id: str, data: LicenceData):
+def save_data(doc_id: str, data: LicenceData, background_tasks: BackgroundTasks):
     result = _load_extraction(doc_id)
     try:
         result.data = extraction.clean_user_data(data)
     except ValueError as e:
         raise HTTPException(422, str(e))
     storage.save_extraction(doc_id, result.model_dump_json())
+    # Keep chat grounded in the corrected field values.
+    background_tasks.add_task(rag.index_document_safely, doc_id, result)
     return result.data

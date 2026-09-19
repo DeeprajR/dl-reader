@@ -51,6 +51,21 @@ CORE_FIELDS: tuple[str, ...] = (
 DATE_FIELDS: frozenset[str] = frozenset({"date_of_birth", "date_of_issue", "date_of_expiry"})
 
 
+class ChatRequest(BaseModel):
+    question: str
+
+
+class ChatSource(BaseModel):
+    text: str
+    origin: Literal["ocr_text", "extracted_fields"]
+    bbox: Box | None
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[ChatSource]
+
+
 class DocumentSummary(BaseModel):
     doc_id: str
     filename_label: str
