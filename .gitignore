@@ -17,3 +17,5 @@ __pycache__/
 # Node / frontend build
 node_modules/
 dist/
+
+plan.md

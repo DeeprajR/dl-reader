@@ -57,10 +57,10 @@ flowchart TD
 
 **How it works**
 
-1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name. For a PDF, the first two pages (front and back) are used.
+1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name.
 2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify.
 3. **Review.** Edit and save the form. Click a field to see it on the document, or click a highlight to jump to its field.
-4. **Chat.** Each answer is built only from passages found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
+4. **Chat.** Each answer is built only from text found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
 
 | API endpoint | What it does |
 |---|---|
@@ -308,9 +308,9 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 
 - **Python and FastAPI for the backend.** The app has to wait on two slow things at once (OCR and the AI model), and FastAPI is built for that. It also validates every request and response, and serves the built frontend in the container, so one process runs the whole app. Flask would have needed extra pieces for each of these; Django is far more than a small API needs.
 - **Tesseract for OCR.** It runs on your computer for free, and it returns the position of every word, which is what the highlights are built from. Cloud OCR services (Google Vision, AWS Textract) are more accurate but cost money per page and send the licence to another company. EasyOCR and PaddleOCR need a GPU to be usably fast.
-- **poppler for PDFs.** Licences often arrive as scanned PDFs. poppler turns the pages into images so the rest of the app only ever handles images.
+- **poppler for PDFs.** Licences often arrive as scanned PDFs. poppler turns the pages into images so the rest of the app only ever handles images. (optional additional)
 - **A vision AI model through OpenRouter.** OpenRouter offers models from many vendors through one API, so the model is a setting (`LLM_MODEL`), not code. Using a vendor's own SDK would have tied the app to that vendor.
-- **Ollama as a local alternative.** Same setting, different value (`ollama/...`), and the documents never leave the computer. It's optional because local models are slower and less accurate.
+- **Ollama as a local alternative.** Same setting, different value (`ollama/...`), and the documents never leave the computer. It's optional because local models are slower, resource intensive and less accurate.
 - **sentence-transformers and ChromaDB for the chat search.** The search model (`all-MiniLM-L6-v2`) is 90 MB and runs locally, so searching costs nothing and sends nothing anywhere. ChromaDB stores the results in a folder, with no server to run. Hosted alternatives (OpenAI embeddings, Pinecone) would add cost and another place the licence data goes.
 - **SQLite and plain files for storage.** A licence reader for one user needs no database server. Everything lives in two folders, which also makes the Docker image self-contained.
 - **React, Vite and Tailwind for the frontend.** The interface is a single page with three linked parts (document, form, chat) that update each other, which React handles well. Vite makes changes appear instantly while developing, and Tailwind keeps the styling in the components. Next.js was not needed: there is nothing to render on a server.
@@ -351,4 +351,4 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 
 ## AI development tools used
 
-- **Claude Code** with **Claude Opus 5**. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.
+- **Claude Code** using **Claude Opus 5**. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.
