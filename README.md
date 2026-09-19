@@ -76,7 +76,7 @@ flowchart TD
 
 ## Setup/run instructions
 
-There are two ways to run the app. Pick one:
+You can run the app in either of two ways. Both give you the same complete app, so you only need one. **Docker alone is enough**: the backend, the frontend and all their tools are inside the container.
 
 | | **A. With Docker** (easiest) | **B. Directly on your computer** |
 |---|---|---|
