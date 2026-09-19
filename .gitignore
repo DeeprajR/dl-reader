@@ -1,0 +1,19 @@
+# Secrets
+.env
+
+# Runtime data (contains PII: uploads, extractions, vector index)
+data/
+chroma/
+
+# Sample licence documents (PII) — never commit
+samples/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node / frontend build
+node_modules/
+dist/
