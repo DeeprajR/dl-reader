@@ -38,7 +38,11 @@ COPY backend/requirements.txt ./
 RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 \
     && pip install -r requirements.txt
 
-# Bake the embedding model into the image: no download on first chat, works offline.
+# Download the chat's search model (all-MiniLM-L6-v2, ~90 MB) now, while the image is built.
+# The sentence-transformers library fetches its models from the Hugging Face model hub, the
+# way pip fetches packages from PyPI. Doing it here means the first chat question is not slow.
+# HF_HUB_OFFLINE=1 (the library's own setting name) then tells it to use that copy and never
+# go online, so the running container needs no access to the model hub.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 ENV HF_HUB_OFFLINE=1
 
