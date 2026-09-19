@@ -33,6 +33,12 @@ def tesseract_cmd() -> str:
     return "tesseract"
 
 
+def tesseract_version() -> str:
+    """Raises if Tesseract cannot be run."""
+    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd()
+    return str(pytesseract.get_tesseract_version())
+
+
 def _prepare(img: Image.Image) -> tuple[Image.Image, float]:
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")

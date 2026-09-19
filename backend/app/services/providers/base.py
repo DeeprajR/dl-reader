@@ -105,18 +105,25 @@ def parse_licence_json(text: str | None) -> LicenceData:
 
 
 def llm_model() -> str:
-    return os.getenv("LLM_MODEL") or DEFAULT_MODEL
+    """Extraction model: LLM_MODEL, else the default chosen by scripts/compare_models.py."""
+    return (os.getenv("LLM_MODEL") or "").strip() or DEFAULT_MODEL
 
 
 def chat_model() -> str:
-    return os.getenv("LLM_CHAT_MODEL") or llm_model()
+    """Chat model: LLM_CHAT_MODEL if set, else the extraction model."""
+    return (os.getenv("LLM_CHAT_MODEL") or "").strip() or llm_model()
 
 
 def get_provider(model: str | None = None) -> ExtractionProvider:
-    """Provider for `model` (default: LLM_MODEL). "ollama/..." models run locally."""
-    model = model or llm_model()
+    """The extraction provider for `model` (default: LLM_MODEL).
+
+    Routes only ever see the ExtractionProvider Protocol. Taking an explicit model lets
+    scripts/compare_models.py run two models through identical code.
+    """
+    model = (model or "").strip() or llm_model()
     if model.startswith("ollama/"):
         raise ProviderError("Ollama models are not supported yet. Set LLM_MODEL to an OpenRouter model.")
+    # Imported here: provider modules import this module for the shared prompt and parser.
     from app.services.providers.openrouter import OpenRouterProvider
 
     return OpenRouterProvider(model)

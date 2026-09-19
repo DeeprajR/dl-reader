@@ -1,4 +1,6 @@
 import logging
+import os
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,7 +20,8 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 from app.routes import chat, documents  # noqa: E402
-from app.services import storage  # noqa: E402
+from app.services import ocr, rag, storage  # noqa: E402
+from app.services.providers.base import chat_model, llm_model  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("licence_reader")
@@ -26,9 +29,35 @@ logger = logging.getLogger("licence_reader")
 FRONTEND_DIST = REPO_DIR / "frontend" / "dist"
 
 
+def startup_checks() -> None:
+    """Fail fast on missing required config; warn about optional system tools."""
+    if not os.getenv("OPENROUTER_API_KEY"):
+        message = (
+            "OPENROUTER_API_KEY is not set. Copy backend/.env.example to .env in the repository "
+            "root (or backend/.env) and add your OpenRouter API key."
+        )
+        logger.critical(message)
+        raise RuntimeError(message)
+    logger.info("Extraction model: %s | chat model: %s", llm_model(), chat_model())
+
+    try:
+        logger.info("Tesseract %s found", ocr.tesseract_version())
+    except Exception:
+        logger.warning(
+            "Tesseract was not found (set TESSERACT_CMD or add it to PATH). Extraction will still "
+            "run, but nothing can be cross-checked: every field will be flagged for review."
+        )
+
+    poppler_dir = os.getenv("POPPLER_PATH")
+    if not (shutil.which("pdftoppm", path=poppler_dir) if poppler_dir else shutil.which("pdftoppm")):
+        logger.warning("poppler (pdftoppm) was not found (set POPPLER_PATH or add it to PATH). PDF uploads will fail.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    startup_checks()
     storage.init()
+    rag.warm_up()
     yield
 
 

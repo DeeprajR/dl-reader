@@ -1,6 +1,7 @@
 """OpenRouter (OpenAI-compatible) provider for vision extraction and chat completions."""
 
 import base64
+import functools
 import logging
 import os
 
@@ -24,13 +25,17 @@ LLM_TIMEOUT_S = 60.0
 MAX_ATTEMPTS = 2  # one retry on failure or invalid JSON
 
 
+@functools.lru_cache(maxsize=2)
+def _client_for(api_key: str) -> AsyncOpenAI:
+    return AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key, timeout=LLM_TIMEOUT_S, max_retries=0)
+
+
 def openrouter_client() -> AsyncOpenAI:
+    """Shared client (one connection pool) for extraction and chat."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise ProviderError("OPENROUTER_API_KEY is not set on the server.")
-    return AsyncOpenAI(
-        base_url=OPENROUTER_BASE_URL, api_key=api_key, timeout=LLM_TIMEOUT_S, max_retries=0
-    )
+    return _client_for(api_key)
 
 
 async def complete(client: AsyncOpenAI, model: str, messages: list[dict]) -> str:

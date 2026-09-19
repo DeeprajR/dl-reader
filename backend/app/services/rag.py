@@ -73,6 +73,18 @@ def _embed(texts: list[str]) -> list[list[float]]:
     return _embedder.encode(texts, normalize_embeddings=True).tolist()
 
 
+def warm_up() -> None:
+    """Load the embedding model in the background so the first chat is not slow."""
+
+    def load():
+        try:
+            _embed(["warm-up"])
+        except Exception:
+            logger.exception("Could not load the embedding model %s", EMBEDDING_MODEL)
+
+    threading.Thread(target=load, name="embedding-warm-up", daemon=True).start()
+
+
 def _doc_lock(doc_id: str) -> threading.RLock:
     with _doc_locks_guard:
         return _doc_locks.setdefault(doc_id, threading.RLock())

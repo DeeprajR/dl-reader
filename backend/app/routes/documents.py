@@ -12,7 +12,14 @@ from pdf2image import convert_from_bytes
 from pdf2image.exceptions import PDFInfoNotInstalledError
 from PIL import Image, ImageOps
 
-from app.schemas import DocumentSummary, ExtractionResult, ImageMeta, LicenceData, UploadResponse
+from app.schemas import (
+    CORE_FIELDS,
+    DocumentSummary,
+    ExtractionResult,
+    ImageMeta,
+    LicenceData,
+    UploadResponse,
+)
 from app.services import extraction, ocr, rag, storage
 from app.services.providers import base as providers
 from app.services.providers.base import ProviderError
@@ -27,7 +34,7 @@ _MAGIC = {"jpeg": b"\xff\xd8\xff", "png": b"\x89PNG\r\n\x1a\n", "pdf": b"%PDF-"}
 _MEDIA_TYPES = {"jpeg": "image/jpeg", "png": "image/png"}
 _KIND_NAMES = {"jpeg": "JPEG", "png": "PNG", "pdf": "PDF"}
 _EXIF_ORIENTATION = 0x0112
-_PDF_DPI = 200
+_PDF_LONG_SIDE = 2000  # render page 1 so its longest side is this many pixels (bounds huge pages)
 _CHUNK = 1024 * 1024
 # Vision models cap image size (some at 5 MB); larger working images are downscaled for the LLM
 # only. OCR always runs on the full-resolution working image.
@@ -72,7 +79,7 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
         try:
             pages = convert_from_bytes(
                 data,
-                dpi=_PDF_DPI,
+                size=_PDF_LONG_SIDE,
                 first_page=1,
                 last_page=1,
                 poppler_path=os.getenv("POPPLER_PATH") or None,
@@ -205,6 +212,9 @@ async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
         logger.error("OCR failed for %s: %s: %s", doc_id, type(ocr_result).__name__, ocr_result)
         warnings.append("OCR could not run on this document; nothing could be cross-checked.")
         ocr_result = ocr.OcrResult(text="", words=[])
+
+    if all(getattr(llm_data, name).value is None for name in CORE_FIELDS):
+        warnings.append("No driving licence fields were found. Is this image a driving licence?")
 
     data, merge_warnings = extraction.merge(llm_data, ocr_result.text, page=doc["page_number"])
     result = ExtractionResult(
