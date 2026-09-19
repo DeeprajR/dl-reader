@@ -14,10 +14,12 @@ pytestmark = [pytest.mark.phase2, pytest.mark.step8]
 
 
 def dockerfile() -> str:
+    """The Dockerfile as text."""
     return (REPO_DIR / "Dockerfile").read_text(encoding="utf-8")
 
 
 def test_multi_stage_node_build_then_python_runtime():
+    """Two stages: Node builds the frontend, then slim Python runs the app. Node is not in the final image."""
     stages = re.findall(r"^FROM\s+(\S+)", dockerfile(), flags=re.MULTILINE | re.IGNORECASE)
     assert len(stages) == 2
     assert stages[0].startswith("node:20") and stages[0].endswith("-slim")
@@ -25,6 +27,7 @@ def test_multi_stage_node_build_then_python_runtime():
 
 
 def test_runtime_installs_ocr_tools_and_builds_frontend():
+    """The image installs Tesseract and poppler, builds the frontend, and installs the Python packages."""
     text = dockerfile()
     assert re.search(r"apt-get install[^\n]*tesseract-ocr", text) and "poppler-utils" in text
     assert "vite build" in text or "npm run build" in text
@@ -32,6 +35,7 @@ def test_runtime_installs_ocr_tools_and_builds_frontend():
 
 
 def test_serves_on_port_7860_configurable_via_port():
+    """The app listens on 7860, or on whatever the PORT setting says."""
     text = dockerfile()
     assert "7860" in text
     assert "uvicorn" in text and "app.main:app" in text
@@ -39,6 +43,7 @@ def test_serves_on_port_7860_configurable_via_port():
 
 
 def test_dockerignore_keeps_secrets_and_documents_out_of_the_image():
+    """Security: .env, the sample licences and stored data are never copied into the image."""
     entries = {line.strip().rstrip("/") for line in (REPO_DIR / ".dockerignore").read_text().splitlines()}
     for required in (".env", "samples", "data", "chroma", "node_modules"):
         assert any(e.lstrip("*/").startswith(required) for e in entries), required

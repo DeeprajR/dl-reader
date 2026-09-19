@@ -15,6 +15,7 @@ import textwrap
 import time
 from pathlib import Path
 
+# The script lives outside the `app` package, so the backend folder is added to the import path.
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = BACKEND_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR))
@@ -54,6 +55,7 @@ from app.services.providers.base import DEFAULT_MODEL, get_provider  # noqa: E40
 
 DEFAULT_ALT_MODEL = "anthropic/claude-sonnet-5"
 SAMPLES_DIR = REPO_DIR / "samples"
+# Column widths of the printed table, in characters.
 COL_FIELD, COL_VALUE, COL_AGREE = 30, 36, 6
 
 
@@ -65,6 +67,7 @@ def load_sample(path: Path) -> tuple[bytes, str]:
 
 
 async def run_model(model: str, image: bytes, media_type: str):
+    """Read one sample with one model. Returns (data, error message, seconds); a failure is reported, not raised."""
     start = time.perf_counter()
     try:
         data = await get_provider(model).extract(image, media_type)
@@ -74,22 +77,27 @@ async def run_model(model: str, image: bytes, media_type: str):
 
 
 def values(data: LicenceData | None) -> dict[str, str | None]:
+    """Every field's value by name, e.g. {"full_name": "JOHN DOE", ...}. Empty when the model failed."""
     return {name: field.value for name, field in iter_fields(data)} if data else {}
 
 
 def print_row(cells: list[str], widths: list[int]) -> None:
+    """Print one table row. A cell that is too long for its column wraps onto further lines."""
     wrapped = [textwrap.wrap(c, w) or [""] for c, w in zip(cells, widths)]
     for i in range(max(len(w) for w in wrapped)):
         print(" | ".join((w[i] if i < len(w) else "").ljust(width) for w, width in zip(wrapped, widths)))
 
 
 def print_table(label_a: str, label_b: str, a: dict, b: dict) -> None:
+    """Print both models' values field by field, with a yes/NO column showing where they agree."""
     widths = [COL_FIELD, COL_VALUE, COL_VALUE, COL_AGREE]
+    # All field names, in model A's order, followed by the fields that only model B returned.
     names = list(a) + [n for n in b if n not in a]
     print_row(["field", label_a, label_b, "agree?"], widths)
     print("-+-".join("-" * w for w in widths))
     for name in names:
         va, vb = a.get(name), b.get(name)
+        # Compared after normalising, so "John Doe" and "JOHN DOE." count as agreeing.
         agree = "yes" if normalize(va) == normalize(vb) else "NO"
         print_row([name, "(null)" if va is None else va, "(null)" if vb is None else vb, agree], widths)
 
@@ -105,10 +113,12 @@ async def main() -> None:
         sys.exit(f"No .jpg/.jpeg/.png/.pdf files found in {SAMPLES_DIR}")
 
     print(f"Model A: {model_a}\nModel B: {model_b}\nSamples: {len(samples)} in {SAMPLES_DIR}\n")
+    # Running totals per model, for the summary at the end.
     totals = {m: {"latency": 0.0, "null_core": 0, "null_all": 0, "fields": 0, "errors": 0} for m in (model_a, model_b)}
 
     for path in samples:
         image, media_type = load_sample(path)
+        # Both models read the same image at the same time.
         (data_a, err_a, t_a), (data_b, err_b, t_b) = await asyncio.gather(
             run_model(model_a, image, media_type), run_model(model_b, image, media_type)
         )
@@ -125,6 +135,7 @@ async def main() -> None:
             if err:
                 tot["errors"] += 1
                 continue
+            # Count the empty fields: all of them, and the eight main ones (names without the "other_fields." prefix).
             vals = values(data)
             tot["fields"] += len(vals)
             tot["null_all"] += sum(v is None for v in vals.values())

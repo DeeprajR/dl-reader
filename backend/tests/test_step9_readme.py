@@ -5,6 +5,7 @@ from conftest import REPO_DIR
 
 pytestmark = [pytest.mark.phase2, pytest.mark.step9]
 
+# Phrases the README must contain (compared in lowercase), as the specification lists them.
 REQUIRED = [
     # sections
     "technology stack",
@@ -38,17 +39,21 @@ REQUIRED = [
 
 @pytest.fixture(scope="module")
 def readme() -> str:
+    """The README's text, read once for the whole file."""
     return (REPO_DIR / "README.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("phrase", REQUIRED)
 def test_readme_mentions(readme, phrase):
+    """One test per required phrase, so a failure names exactly what is missing."""
     assert phrase in readme.lower()
 
 
 def test_readme_has_both_mermaid_diagrams(readme):
+    """The README has the two required diagrams."""
     assert readme.count("```mermaid") >= 2  # pipeline + chat grounding tiers
 
 
 def test_readme_has_no_unfilled_placeholders(readme):
+    """No template placeholders are left in the README."""
     assert "<<" not in readme and "TODO" not in readme

@@ -13,10 +13,12 @@ FRONTEND = REPO_DIR / "frontend"
 
 
 def saved_data(client, doc_id):
+    """The stored form data, as the frontend gets it when a document is reopened."""
     return client.get(f"/api/documents/{doc_id}/extract").json()["data"]
 
 
 def test_save_persists_edits_across_reopen(client, extracted):
+    """Edits are tidied (trimmed, dates normalised, blanks to null), saved, and still there on reopen."""
     data = saved_data(client, extracted)
     data["issuing_authority"]["value"] = "  RTO, Pune (verified)  "
     data["date_of_issue"]["value"] = "16/06/2019"  # normalised on save
@@ -45,6 +47,7 @@ def test_save_persists_edits_across_reopen(client, extracted):
     ],
 )
 def test_save_rejects_invalid_values(client, extracted, field, value, fragment):
+    """A bad date or an over-long value is a 422 that names the field, and nothing is saved."""
     data = saved_data(client, extracted)
     data[field]["value"] = value
     response = client.put(f"/api/documents/{extracted}/data", json=data)
@@ -54,6 +57,7 @@ def test_save_rejects_invalid_values(client, extracted, field, value, fragment):
 
 
 def test_save_rejects_bad_other_field_names_and_shapes(client, extracted):
+    """An unsafe field name, or a body of the wrong shape, is rejected with a 422."""
     data = saved_data(client, extracted)
     data["other_fields"]["Bad Key!"] = data["other_fields"]["blood_group"]
     assert client.put(f"/api/documents/{extracted}/data", json=data).status_code == 422
@@ -64,6 +68,7 @@ def test_save_rejects_bad_other_field_names_and_shapes(client, extracted):
 
 
 def test_save_validates_per_class_dates(client, extracted):
+    """Per-class dates such as lmv_valid_till are normalised and validated like the main dates."""
     data = saved_data(client, extracted)
     data["other_fields"]["lmv_valid_till"] = {**data["other_fields"]["blood_group"], "value": "15/06/2034"}
     assert client.put(f"/api/documents/{extracted}/data", json=data).json()["other_fields"]["lmv_valid_till"]["value"] == "2034-06-15"
@@ -74,6 +79,7 @@ def test_save_validates_per_class_dates(client, extracted):
 
 
 def test_save_requires_an_extraction(client, uploaded):
+    """A form cannot be saved for a document that has not been read yet."""
     response = client.put(f"/api/documents/{uploaded}/data", json=make_licence().model_dump())
     assert response.status_code == 404
     assert "not been extracted" in response.json()["error"]
@@ -83,16 +89,19 @@ def test_save_requires_an_extraction(client, uploaded):
 
 
 def read(path):
+    """A frontend source file as text."""
     return (FRONTEND / path).read_text(encoding="utf-8")
 
 
 def test_frontend_uses_relative_api_base_and_dev_proxy():
+    """The frontend always calls /api, so the same code works with the dev server and in Docker."""
     assert "const API = '/api'" in read("src/api.js")  # same code in dev and in the container
     config = read("vite.config.js")
     assert "'/api'" in config and "8000" in config
 
 
 def test_frontend_is_react_18_with_vite():
+    """The specification's frontend stack: React 18, built with Vite."""
     import json
 
     package = json.loads(read("package.json"))
@@ -102,6 +111,7 @@ def test_frontend_is_react_18_with_vite():
 
 
 def test_frontend_implements_spec_views_and_texts():
+    """The three views exist, and the texts the specification requires are present."""
     for view in ("DocumentListView", "UploadView", "DocumentWorkspace"):
         assert (FRONTEND / "src" / "views" / f"{view}.jsx").is_file()
     form = read("src/components/ExtractedForm.jsx")
@@ -111,12 +121,14 @@ def test_frontend_implements_spec_views_and_texts():
 
 @pytest.mark.skipif(not (FRONTEND / "dist" / "index.html").is_file(), reason="frontend not built (npm run build)")
 def test_backend_serves_built_frontend_without_shadowing_api(client):
+    """In the container the backend serves the page at / while /api still answers JSON."""
     page = client.get("/")
     assert page.status_code == 200 and "<div id=\"root\">" in page.text
     assert client.get("/api/documents").headers["content-type"].startswith("application/json")
 
 
 def test_form_has_exactly_the_nine_required_fields():
+    """The form shows exactly the nine required fields, in order, under their required labels."""
     import re
 
     labels = re.findall(r"label: '([^']+)'", read("src/fields.js"))

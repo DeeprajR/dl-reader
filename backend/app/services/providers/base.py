@@ -11,10 +11,14 @@ from app.schemas import CORE_FIELDS, FieldValue, LicenceData
 
 logger = logging.getLogger(__name__)
 
+# Used when LLM_MODEL is not set. Chosen with scripts/compare_models.py (see the README).
 DEFAULT_MODEL = "google/gemini-3.8-flash"
+# A model name that starts with this runs locally through Ollama, e.g. "ollama/qwen2.5vl:3b".
 OLLAMA_PREFIX = "ollama/"
 MAX_ATTEMPTS = 2  # one retry on failure or invalid JSON
 
+# The LLM's instructions for reading a licence, word for word from the specification. Rule 1
+# (copy the printed text) and rule 2 (never guess) are what make the OCR cross-check possible.
 EXTRACTION_SYSTEM_PROMPT = """
 You are a precise document data extraction system. You will receive an image of a driving licence.
 Extract ONLY information that is actually visible in the image.
@@ -27,7 +31,10 @@ Rules:
 6. Respond with ONLY a JSON object matching the provided schema. No prose, no markdown fences.
 """.strip()
 
+# The user prompt shows the LLM the exact JSON shape to return. It is built from CORE_FIELDS, so
+# the prompt and the data model cannot drift apart.
 _FIELD = '{"value": string | null, "source_text": string | null}'
+# A hint per field: what it is, and the labels it is usually printed under.
 _FIELD_NOTES = {
     "full_name": "holder's full name",
     "licence_number": "driving licence number",
@@ -55,10 +62,15 @@ EXTRACTION_USER_PROMPT = (
     'that class\'s table row exactly as printed (e.g. "LMV 01-02-2020 31-01-2040"). Omit them '
     "if no such table is printed."
 )
+# Sent after a reply that was not valid JSON, on the one retry.
 JSON_RETRY_PROMPT = "Your previous response was not valid JSON. Return only the JSON object."
 
 
 class ExtractionProvider(Protocol):
+    """What every LLM provider must offer. The routes only know this interface, so a new provider
+    can be added without touching them.
+    """
+
     async def extract(self, image_bytes: bytes, media_type: str) -> LicenceData:
         """Extract licence fields. bbox is left None; it is filled later by the merge step."""
         ...
@@ -69,14 +81,18 @@ class ProviderError(Exception):
 
     def __init__(self, message: str, *, retryable: bool = False):
         super().__init__(message)
+        # True for failures that may pass on their own (timeout, busy server), False for the rest (bad key).
         self.retryable = retryable
 
 
 class InvalidJSONError(ValueError):
+    """The model's reply could not be parsed as the expected JSON object."""
+
     pass
 
 
 def _as_text(v) -> str | None:
+    """Any JSON value as clean text, or None. Models sometimes return a list or a number where text is expected."""
     if v is None:
         return None
     if isinstance(v, (list, tuple)):
@@ -86,10 +102,12 @@ def _as_text(v) -> str | None:
 
 
 def _field(raw) -> FieldValue:
+    """One field of the reply as a FieldValue. It always starts as "review" with no box: those are set by the merge."""
     if isinstance(raw, dict):
         value, source = _as_text(raw.get("value")), _as_text(raw.get("source_text"))
     else:  # bare value instead of {value, source_text}
         value, source = _as_text(raw), None
+    # A source text without a value is meaningless, so it is dropped.
     if value is None:
         source = None
     return FieldValue(value=value, source_text=source, confidence="review", bbox=None)
@@ -99,6 +117,7 @@ def parse_licence_json(text: str | None) -> LicenceData:
     """Parse a model reply into LicenceData. Raises InvalidJSONError if no JSON object is found."""
     if not text:
         raise InvalidJSONError("empty response")
+    # Models often wrap JSON in markdown fences or add a sentence around it. Keep the outermost { ... } only.
     cleaned = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text.strip())
     start, end = cleaned.find("{"), cleaned.rfind("}")
     if start == -1 or end <= start:
@@ -111,6 +130,7 @@ def parse_licence_json(text: str | None) -> LicenceData:
     if not isinstance(obj, dict):
         raise InvalidJSONError("top-level JSON is not an object")
 
+    # "other_fields" keys are made safe: lowercase snake_case, and never the name of a core field.
     other_raw = obj.get("other_fields")
     other = {}
     if isinstance(other_raw, dict):
@@ -118,6 +138,7 @@ def parse_licence_json(text: str | None) -> LicenceData:
             key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
             if key and key not in CORE_FIELDS:
                 other[key] = _field(raw)
+    # A core field missing from the reply becomes an empty field instead of an error.
     return LicenceData(**{name: _field(obj.get(name)) for name in CORE_FIELDS}, other_fields=other)
 
 
@@ -127,6 +148,7 @@ async def extract_with_retry(
     """Shared by every provider: call, parse, and retry once on a transient failure or invalid
     JSON (appending the JSON_RETRY_PROMPT after the bad reply). Non-retryable errors raise."""
     last_error: ProviderError | None = None
+    # Two kinds of failure are retried once: the call itself failing, and a reply that is not valid JSON.
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             reply = await complete(messages)
@@ -146,11 +168,13 @@ async def extract_with_retry(
                     {"role": "assistant", "content": reply},
                     {"role": "user", "content": JSON_RETRY_PROMPT},
                 ]
+    # Both attempts failed: report the last error.
     assert last_error is not None
     raise last_error
 
 
 def is_local(model: str) -> bool:
+    """True when the model runs on this machine through Ollama."""
     return model.startswith(OLLAMA_PREFIX)
 
 

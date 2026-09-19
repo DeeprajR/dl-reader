@@ -1,3 +1,7 @@
+// The page for one document: the image on the left, and on the right two tabs, the review form
+// and the chat. This component owns what links the two sides: which field or chat source is
+// selected, and therefore which highlights are drawn on the image.
+
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import DocumentViewer from '../components/DocumentViewer.jsx'
@@ -19,6 +23,7 @@ export default function DocumentWorkspace({ docId }) {
   const [activeField, setActiveField] = useState(null)
   const [activeSource, setActiveSource] = useState(null) // { id, box }
 
+  // Load the image size (needed to scale the highlights) and the file's display name.
   const load = useCallback(() => {
     setError(null)
     Promise.all([api.getMeta(docId), api.listDocuments()])
@@ -35,6 +40,7 @@ export default function DocumentWorkspace({ docId }) {
   const focusField = useCallback((key) => {
     setActiveField(key)
     const input = document.getElementById(fieldDomId(key))
+    // Focus without the browser's instant jump, then scroll smoothly to the centre instead.
     input?.focus({ preventScroll: true })
     input?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [])
@@ -51,6 +57,7 @@ export default function DocumentWorkspace({ docId }) {
   }
   if (!info) return <p className="text-sm text-slate-500">Loading document…</p>
 
+  // Form tab: one highlight per located field. Chat tab: only the source the user has opened.
   const highlights =
     tab === 'form'
       ? fieldBoxes.map((f) => ({
@@ -74,6 +81,7 @@ export default function DocumentWorkspace({ docId }) {
         <h1 className="min-w-0 truncate text-lg font-semibold">{info.label}</h1>
       </div>
 
+      {/* Two columns on wide screens, stacked on narrow ones. */}
       <div className="grid items-start gap-6 lg:grid-cols-2">
         {/* Left: the document stays visible while reviewing the form or chatting. */}
         <section className="lg:sticky lg:top-6">

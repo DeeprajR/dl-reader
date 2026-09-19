@@ -27,11 +27,13 @@ OLLAMA_TIMEOUT_S = 300.0
 
 
 def ollama_url() -> str:
+    """The Ollama server's address from OLLAMA_HOST. A bare "host:port" gets "http://" in front."""
     host = (os.getenv("OLLAMA_HOST") or DEFAULT_OLLAMA_URL).strip().rstrip("/")
     return host if "://" in host else f"http://{host}"
 
 
 def _client(timeout: float) -> httpx.AsyncClient:
+    """A new HTTP client. It is a function of its own so the tests can replace it with a fake."""
     return httpx.AsyncClient(timeout=timeout)  # seam for tests
 
 
@@ -39,9 +41,12 @@ async def complete(
     base_url: str, model: str, messages: list[dict], *, json_mode: bool = False
 ) -> str:
     """One Ollama /api/chat call; failures become ProviderError (retryable where sensible)."""
+    # "stream": False asks for the whole answer at once. temperature 0 keeps the answers repeatable.
     payload: dict = {"model": model, "messages": messages, "stream": False, "options": {"temperature": 0}}
     if json_mode:
+        # Ollama's JSON mode forces valid JSON, which small local models otherwise often get wrong.
         payload["format"] = "json"
+    # The same advice is used by several of the errors below.
     unavailable = (
         f"Could not reach Ollama at {base_url}. Start it (`ollama serve`) and pull the model "
         f"(`ollama pull {model}`), or set LLM_MODEL to an OpenRouter model."
@@ -56,6 +61,7 @@ async def complete(
     except httpx.HTTPError as e:
         raise ProviderError(f"Ollama request failed ({type(e).__name__}). {unavailable}", retryable=True)
 
+    # Ollama answers 404 when the model has not been downloaded.
     if resp.status_code == 404:
         raise ProviderError(
             f"Ollama has no model '{model}'. Run `ollama pull {model}` or change LLM_MODEL."
@@ -78,6 +84,8 @@ class OllamaProvider:
         self.base_url = (base_url or ollama_url()).rstrip("/")
 
     async def extract(self, image_bytes: bytes, media_type: str) -> LicenceData:
+        """Send the prompt and the image, and parse the reply (with one retry)."""
+        # Ollama's own format: the images go in a separate list, as plain base64.
         messages: list[dict] = [
             {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
             {

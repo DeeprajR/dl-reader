@@ -1,8 +1,13 @@
+// The "Ask the document" chat: the message list, each answer's sources, and the question box.
+
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 
+// The backend rejects longer questions, so the input stops at the same length.
 const MAX_CHARS = 1000
+// How each kind of source is labelled. The keys are the `origin` values the API returns.
 const ORIGIN_LABELS = { ocr_text: 'Document text', extracted_fields: 'Extracted field', calculated: 'Calculated' }
+// Shown in an empty chat, so a new user has something to click.
 const SUGGESTED_QUESTIONS = [
   'When does the licence expire?',
   'How many days until it expires?',
@@ -66,6 +71,7 @@ function Sources({ messageId, sources, activeSourceId, onSourceSelect }) {
   )
 }
 
+// One chat bubble: the user's question, an error, or an answer with its sources.
 function Message({ message, messageId, activeSourceId, onSourceSelect }) {
   if (message.role === 'user') {
     return (
@@ -103,6 +109,7 @@ export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
   const [pending, setPending] = useState(false)
   const bottomRef = useRef(null)
 
+  // Keep the newest message in view.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [messages, pending])
@@ -112,6 +119,7 @@ export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
     e?.preventDefault()
     const text = (suggested ?? question).trim()
     if (!text || pending) return
+    // Show the question at once, then wait for the answer.
     setMessages((m) => [...m, { role: 'user', text }])
     setQuestion('')
     setPending(true)
@@ -165,6 +173,7 @@ export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => {
+              // Enter sends, Shift+Enter makes a new line. `isComposing` avoids sending while typing with an IME.
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) ask(e)
             }}
             disabled={pending}
@@ -182,6 +191,7 @@ export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
             Ask
           </button>
         </div>
+        {/* The character counter appears only when the limit is close. */}
         {question.length > MAX_CHARS - 100 && (
           <p className="mt-1 text-right text-xs text-slate-500">
             {question.length}/{MAX_CHARS}

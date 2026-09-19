@@ -1,5 +1,7 @@
+/* Tailwind CSS. All styling is done with utility classes on the components themselves. */
 @import "tailwindcss";
 
+/* The few page-wide defaults: smoother text, a light grey page, near-black text. */
 @layer base {
   html {
     -webkit-font-smoothing: antialiased;

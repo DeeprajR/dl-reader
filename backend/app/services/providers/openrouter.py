@@ -15,12 +15,19 @@ from app.services.providers.base import (
     extract_with_retry,
 )
 
+# OpenRouter speaks the OpenAI API, so the official `openai` client is pointed at its address.
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# Give up on a call after this many seconds. A licence normally takes 8-15 s.
 LLM_TIMEOUT_S = 60.0
 
 
 @functools.lru_cache(maxsize=2)
 def _client_for(api_key: str) -> AsyncOpenAI:
+    """One client per API key, created once and reused.
+
+    `max_retries=0` turns off the client's own hidden retries: retrying is done once, visibly, in
+    `extract_with_retry`.
+    """
     return AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key, timeout=LLM_TIMEOUT_S, max_retries=0)
 
 
@@ -35,9 +42,11 @@ def openrouter_client() -> AsyncOpenAI:
 async def complete(client: AsyncOpenAI, model: str, messages: list[dict]) -> str:
     """One chat completion; OpenAI SDK errors become ProviderError (retryable where sensible)."""
     try:
+        # temperature=0 makes the model as repeatable as it can be: the same card gives the same answer.
         resp = await client.chat.completions.create(
             model=model, messages=messages, temperature=0, max_tokens=8192
         )
+    # Each failure becomes a message the user can act on. The API key itself is never included.
     except openai.AuthenticationError:
         raise ProviderError("OpenRouter rejected the API key. Check OPENROUTER_API_KEY.")
     except openai.APITimeoutError:
@@ -45,10 +54,12 @@ async def complete(client: AsyncOpenAI, model: str, messages: list[dict]) -> str
     except openai.APIConnectionError:
         raise ProviderError("Could not reach OpenRouter. Check the network connection.", retryable=True)
     except openai.APIStatusError as e:
+        # 429 (rate limited) and 5xx (server trouble) may pass on their own. Other 4xx codes will not.
         retryable = e.status_code == 429 or e.status_code >= 500
         raise ProviderError(
             f"OpenRouter returned HTTP {e.status_code} for model {model}: {e.message}", retryable=retryable
         )
+    # OpenRouter can answer 200 with an error inside the body and no choices.
     if not resp.choices:
         detail = getattr(resp, "error", None) or "no choices returned"
         raise ProviderError(f"The model {model} returned no answer ({detail}).", retryable=True)
@@ -63,6 +74,8 @@ class OpenRouterProvider:
         self.client = openrouter_client()
 
     async def extract(self, image_bytes: bytes, media_type: str) -> LicenceData:
+        """Send the prompt and the image, and parse the reply (with one retry)."""
+        # The OpenAI format carries an image inside the message, as a base64 data URL.
         data_url = f"data:{media_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
         messages: list[dict] = [
             {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},

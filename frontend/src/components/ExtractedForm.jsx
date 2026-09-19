@@ -1,3 +1,6 @@
+// The review form: loads (or runs) the extraction, shows the nine fields with their sources and
+// "Please verify" marks, and saves the user's edits.
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { useToast } from './Toast.jsx'
@@ -11,7 +14,10 @@ const STAGES = [
   { at: 9000, text: 'Verifying…' },
 ]
 
+// One labelled input with its "Please verify" mark and its source line.
+// `active` = this field's highlight is selected on the document.
 function Field({ id, label, kind, field, active, onChange, onFocus }) {
+  // review: OCR could not confirm this value. locatable: it has a highlight on the document.
   const review = field.confidence === 'review'
   const locatable = field.bbox && field.value != null
   const Input = kind === 'multiline' ? 'textarea' : 'input'
@@ -58,6 +64,7 @@ function Field({ id, label, kind, field, active, onChange, onFocus }) {
 // item. Each item keeps its own source and highlight; the sources are listed underneath.
 function OtherField({ id, text, items, active, onChange, onFocus }) {
   const review = items.some(({ field }) => field.confidence === 'review')
+  // The box grows with its content: one row per item, plus a spare row.
   const lines = text ? text.split('\n').length : 0
   return (
     <div>
@@ -110,6 +117,7 @@ function OtherField({ id, text, items, active, onChange, onFocus }) {
   )
 }
 
+// The three-step progress list: done steps get a tick, the current one spins, later ones are grey.
 function ExtractionProgress({ stage }) {
   return (
     <ol className="space-y-3" aria-live="polite">
@@ -142,6 +150,8 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
   const [otherText, setOtherText] = useState('') // the "Other relevant information" box
   const [saving, setSaving] = useState(false)
 
+  // True while this component is on the page. A request can finish after the user has left the
+  // page; its result is then ignored.
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -150,6 +160,7 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     }
   }, [])
 
+  // Put an extraction result on the screen. `saved` is the copy used to detect unsaved changes.
   const apply = useCallback((result) => {
     if (!mounted.current) return
     setWarnings(result.warnings)
@@ -159,10 +170,12 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     setStatus('ready')
   }, [])
 
+  // Ask the backend to read the document (the slow call: OCR plus the AI model).
   const runExtraction = useCallback(async () => {
     setStatus('extracting')
     setError(null)
     setStage(0)
+    // Move the progress text on by the clock, and cancel the timers as soon as the request ends.
     const timers = STAGES.slice(1).map((s, i) => setTimeout(() => setStage(i + 1), s.at))
     try {
       apply(await api.runExtraction(docId))
@@ -176,12 +189,14 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     }
   }, [docId, apply])
 
+  // Open the document: use the saved extraction when there is one, otherwise run it now.
   const load = useCallback(async () => {
     setStatus('loading')
     setError(null)
     try {
       apply(await api.getExtraction(docId)) // persisted result: reopening never re-extracts
     } catch (e) {
+      // 404 means "not extracted yet", which is normal for a document that was just uploaded.
       if (e.status === 404) return runExtraction()
       if (mounted.current) {
         setError({ message: e.message, retry: load })
@@ -215,15 +230,18 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     )
   }, [form, onBoxesChange])
 
+  // Change one field's value, keeping its source, confidence and highlight.
   function update(name, value) {
     setForm((f) => ({ ...f, [name]: { ...f[name], value } }))
   }
 
+  // Save the form. The "other" box is turned back from text lines into separate items first.
   async function save(e) {
     e.preventDefault()
     setSaving(true)
     try {
       const data = await api.saveData(docId, { ...form, other_fields: parseOther(otherText, saved.other_fields) })
+      // The server returns the tidied data (trimmed, dates normalised), and that is what is shown.
       setForm(data)
       setSaved(data)
       setOtherText(composeOther(data.other_fields))
@@ -235,6 +253,7 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     }
   }
 
+  // What to show depends on the status: loading, extracting, error, or the form itself.
   if (status === 'loading') return <p className="p-6 text-sm text-slate-500">Loading extracted data…</p>
   if (status === 'extracting') {
     return (
@@ -252,8 +271,10 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     )
   }
 
+  // dirty: something differs from what was last saved, so the Save button is enabled.
   const dirty = JSON.stringify(form) !== JSON.stringify(saved) || otherText !== composeOther(saved.other_fields)
   const items = otherItems(form.other_fields)
+  // How many of the nine fields need a look. The "other" box counts once, however many items it holds.
   const reviewCount =
     CORE_FIELDS.filter((f) => form[f.name].confidence === 'review').length +
     (items.some(({ field }) => field.confidence === 'review') ? 1 : 0)
@@ -296,6 +317,7 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
         />
       </div>
 
+      {/* The save bar stays visible at the bottom while the form scrolls. */}
       <div className="sticky bottom-0 flex items-center justify-end gap-3 rounded-b-xl border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
         {dirty && <span className="text-xs text-slate-500">Unsaved changes</span>}
         <button

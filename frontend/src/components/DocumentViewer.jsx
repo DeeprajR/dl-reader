@@ -1,9 +1,13 @@
+// Shows the document image with the highlight rectangles drawn on top of it.
+
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import ErrorMessage from './ErrorMessage.jsx'
 
 const PAD = 3 // rendered pixels around each highlight
 
+// Highlight colours: blue = a confirmed field, amber = a field to verify, a stronger blue = the
+// field selected in the form, violet = a chat source.
 const TONES = {
   field: 'border-blue-500/50 bg-blue-400/10 hover:border-blue-600 hover:bg-blue-400/25',
   review: 'border-amber-500/70 bg-amber-300/15 hover:border-amber-600 hover:bg-amber-300/30',
@@ -18,6 +22,8 @@ export default function DocumentViewer({ docId, meta, highlights = [] }) {
   const [failed, setFailed] = useState(false)
   const [rendered, setRendered] = useState(null) // { width, height } of the displayed image
 
+  // Measure the image as displayed, and again whenever its size changes (window resize, layout
+  // change, image finishing loading).
   useEffect(() => {
     const img = imgRef.current
     if (!img) return
@@ -36,6 +42,8 @@ export default function DocumentViewer({ docId, meta, highlights = [] }) {
     return <ErrorMessage message="The document image could not be loaded." onRetry={() => setFailed(false)} />
   }
 
+  // Scale factors from image pixels to screen pixels. They are 0 until the image has been
+  // measured, which keeps the highlights hidden until then.
   const sx = rendered ? rendered.width / meta.width : 0
   const sy = rendered ? rendered.height / meta.height : 0
 
@@ -53,6 +61,7 @@ export default function DocumentViewer({ docId, meta, highlights = [] }) {
         />
         {sx > 0 &&
           highlights.map((h) => {
+            // Position and size on screen, with a few pixels of padding so the box does not touch the text.
             const style = {
               left: h.box.x * sx - PAD,
               top: h.box.y * sy - PAD,
@@ -61,6 +70,8 @@ export default function DocumentViewer({ docId, meta, highlights = [] }) {
             }
             const tone = h.active ? (h.tone === 'source' ? TONES.source : TONES.active) : TONES[h.tone] ?? TONES.field
             const className = `absolute rounded border-2 transition-colors ${tone}`
+            // A highlight with a click handler is a real button. One without (a chat source) is only
+            // decoration, and lets clicks pass through to whatever is underneath.
             return h.onClick ? (
               <button
                 key={h.id}

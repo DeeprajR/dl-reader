@@ -37,6 +37,7 @@ pytestmark = [pytest.mark.phase1, pytest.mark.step2]
 
 
 def confidences(data):
+    """Every field's confidence by name, e.g. {"full_name": "high", ...}."""
     return {name: field.confidence for name, field in iter_fields(data)}
 
 
@@ -67,6 +68,7 @@ def test_normalize_dates():
     ],
 )
 def test_normalize_date_formats(printed, iso):
+    """Every supported printed format becomes YYYY-MM-DD, and anything that is not a real date becomes None."""
     assert normalize_date(printed) == iso
 
 
@@ -87,24 +89,28 @@ def test_confidence_merge():
 
 
 def test_merge_null_values_are_review():
+    """A field the AI left empty can never be "confirmed"."""
     merged, _ = merge(make_licence(issuing_authority=fv(None)), CANNED_OCR_TEXT)
     assert merged.issuing_authority.confidence == "review"
     assert merged.issuing_authority.value is None
 
 
 def test_merge_tolerates_small_ocr_errors():
+    """One misread character (O read as 0) must not stop a correct field from being confirmed."""
     ocr_text = CANNED_OCR_TEXT.replace("JOHN DOE", "J0HN DOE")  # one OCR misread
     merged, _ = merge(make_licence(), ocr_text)
     assert merged.full_name.confidence == "high"
 
 
 def test_merge_matches_dates_by_digits():
+    """A date is confirmed by its digits, so OCR misreading the separators does not matter."""
     ocr_text = CANNED_OCR_TEXT.replace("16-06-2019", "16/06 /2019")  # different separators
     merged, _ = merge(make_licence(), ocr_text)
     assert merged.date_of_issue.confidence == "high"
 
 
 def test_merge_normalizes_date_values_and_warns_on_garbage():
+    """Dates are stored as YYYY-MM-DD with the printed form kept, and an unreadable date adds a warning."""
     data = make_licence(date_of_issue=fv("16-06-2019"), date_of_birth=fv("sometime", "sometime"))
     merged, warnings = merge(data, CANNED_OCR_TEXT)
     assert merged.date_of_issue.value == "2019-06-16"
@@ -113,6 +119,7 @@ def test_merge_normalizes_date_values_and_warns_on_garbage():
 
 
 def test_merge_does_not_mutate_input():
+    """merge returns new data and leaves the object it was given unchanged."""
     data = make_licence()
     merge(data, CANNED_OCR_TEXT)
     assert data.full_name.confidence == "review"
@@ -137,6 +144,7 @@ def test_schema_roundtrip():
 
 
 def licence_json(**overrides) -> str:
+    """The JSON reply a well-behaved model would send for the canned licence. `overrides` replace keys."""
     obj = {name: {"value": field.value, "source_text": field.source_text} for name, field in iter_fields(make_licence())
            if not name.startswith("other_fields.")}
     obj["other_fields"] = {"blood_group": {"value": "O+", "source_text": "O+"}}
@@ -145,6 +153,7 @@ def licence_json(**overrides) -> str:
 
 
 def test_parse_accepts_fences_and_raw_newlines():
+    """Replies wrapped in ```json fences, or with real line breaks inside strings, are still parsed."""
     reply = "```json\n" + licence_json().replace("\\n", "\n") + "\n```"
     data = parse_licence_json(reply)
     assert data.address.source_text == "12 High Street,\nPune"
@@ -152,6 +161,7 @@ def test_parse_accepts_fences_and_raw_newlines():
 
 
 def test_parse_normalizes_loose_shapes():
+    """Sloppy replies are tidied: a bare list, a source without a value, badly named or duplicate keys."""
     reply = licence_json(
         vehicle_classes=["LMV", "MCWG"],  # bare list instead of {value, source_text}
         issuing_authority={"value": None, "source_text": "ignored"},
@@ -165,12 +175,14 @@ def test_parse_normalizes_loose_shapes():
 
 
 def test_parse_missing_fields_become_null():
+    """A field missing from the reply becomes an empty field, not an error."""
     data = parse_licence_json('{"full_name": {"value": "A", "source_text": "A"}}')
     assert data.licence_number.value is None and data.other_fields == {}
 
 
 @pytest.mark.parametrize("reply", ["", "Sorry, I cannot help.", "[1, 2]", "{not json}"])
 def test_parse_rejects_non_json(reply):
+    """An empty reply, prose, a JSON list or broken JSON all raise InvalidJSONError (which triggers the retry)."""
     with pytest.raises(InvalidJSONError):
         parse_licence_json(reply)
 
@@ -194,10 +206,12 @@ def scripted_complete(monkeypatch, *replies):
 
 
 def extract(model="test/model"):
+    """Run the real OpenRouterProvider on a tiny image. The network call underneath is the scripted fake."""
     return asyncio.run(openrouter.OpenRouterProvider(model).extract(image_bytes((40, 30)), "image/png"))
 
 
 def test_provider_request_uses_verbatim_prompt_and_image(monkeypatch):
+    """The request holds the specification's system prompt, the JSON shape, and the image as a data URL."""
     calls = scripted_complete(monkeypatch, licence_json())
     data = extract()
     assert data.licence_number.value == "MH12 20190001234"
@@ -214,6 +228,7 @@ def test_provider_request_uses_verbatim_prompt_and_image(monkeypatch):
 
 
 def test_provider_retries_once_on_invalid_json(monkeypatch):
+    """After an invalid reply the model is shown its reply and asked again for JSON only."""
     calls = scripted_complete(monkeypatch, "not json", licence_json())
     assert extract().full_name.value == "JOHN DOE"
     assert len(calls) == 2
@@ -222,6 +237,7 @@ def test_provider_retries_once_on_invalid_json(monkeypatch):
 
 
 def test_provider_gives_up_after_one_retry(monkeypatch):
+    """Two invalid replies in a row is an error. There is no third attempt."""
     calls = scripted_complete(monkeypatch, "not json", "still not json", licence_json())
     with pytest.raises(ProviderError, match="valid JSON"):
         extract()
@@ -229,12 +245,14 @@ def test_provider_gives_up_after_one_retry(monkeypatch):
 
 
 def test_provider_retries_transient_failures_once(monkeypatch):
+    """A temporary failure such as a timeout is retried once."""
     calls = scripted_complete(monkeypatch, ProviderError("timeout", retryable=True), licence_json())
     assert extract().full_name.value == "JOHN DOE"
     assert len(calls) == 2
 
 
 def test_provider_does_not_retry_permanent_failures(monkeypatch):
+    """A failure that will not fix itself (a bad API key) is reported at once, without a retry."""
     calls = scripted_complete(monkeypatch, ProviderError("bad key"), licence_json())
     with pytest.raises(ProviderError, match="bad key"):
         extract()
@@ -242,6 +260,7 @@ def test_provider_does_not_retry_permanent_failures(monkeypatch):
 
 
 def test_client_config(monkeypatch):
+    """The client points at OpenRouter, times out after 60 s, does no hidden retries, and needs the API key."""
     client = openrouter.openrouter_client()
     assert str(client.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
     assert client.timeout == 60
@@ -256,6 +275,7 @@ def test_client_config(monkeypatch):
 
 
 def test_factory_uses_llm_model_or_explicit_model(monkeypatch):
+    """The provider uses LLM_MODEL, unless a model is passed in (as the compare script does)."""
     monkeypatch.setenv("LLM_MODEL", "vendor/from-env")
     provider = base.get_provider()
     assert isinstance(provider, openrouter.OpenRouterProvider) and provider.model == "vendor/from-env"
@@ -263,6 +283,7 @@ def test_factory_uses_llm_model_or_explicit_model(monkeypatch):
 
 
 def test_factory_defaults(monkeypatch):
+    """Without settings the default model is used, and the chat uses the extraction model unless told otherwise."""
     monkeypatch.delenv("LLM_MODEL")
     assert base.llm_model() == "google/gemini-3.8-flash"  # chosen via compare_models.py
     assert base.chat_model() == "google/gemini-3.8-flash"
@@ -287,6 +308,7 @@ def test_extract_endpoint(client, uploaded, fake_provider, fake_ocr):
 
 
 def test_extraction_is_persisted_and_reopened_without_rerun(client, uploaded, fake_provider, fake_ocr):
+    """Reopening a document returns the saved result: the AI model is called exactly once."""
     assert client.get(f"/api/documents/{uploaded}/extract").status_code == 404  # never extracted
     posted = client.post(f"/api/documents/{uploaded}/extract").json()
 
@@ -296,6 +318,7 @@ def test_extraction_is_persisted_and_reopened_without_rerun(client, uploaded, fa
 
 
 def test_extract_runs_ocr_and_llm_in_parallel(client, uploaded, monkeypatch):
+    """OCR and the AI each take 0.6 s here. Together they must take under 1.1 s, which proves they overlap."""
     def slow_ocr(path):
         time.sleep(0.6)
         return ocr.OcrResult(text=CANNED_OCR_TEXT, words=CANNED_WORDS)
@@ -313,6 +336,7 @@ def test_extract_runs_ocr_and_llm_in_parallel(client, uploaded, monkeypatch):
 
 
 def test_extract_provider_failure_is_clean_502(client, uploaded, monkeypatch, fake_ocr):
+    """When the AI fails the user gets a clear 502, and nothing half-done is saved."""
     monkeypatch.setattr(base, "get_provider", lambda model=None: FakeProvider(error=ProviderError("model timed out")))
     response = client.post(f"/api/documents/{uploaded}/extract")
     assert response.status_code == 502
@@ -321,6 +345,7 @@ def test_extract_provider_failure_is_clean_502(client, uploaded, monkeypatch, fa
 
 
 def test_extract_degrades_when_ocr_fails(client, uploaded, fake_provider, monkeypatch):
+    """When OCR fails the fields are still returned, all marked for review, with a warning that says why."""
     def broken_ocr(path):
         raise RuntimeError("tesseract missing")
 
@@ -333,6 +358,7 @@ def test_extract_degrades_when_ocr_fails(client, uploaded, fake_provider, monkey
 
 
 def test_extract_warns_when_no_licence_fields_found(client, uploaded, monkeypatch, fake_ocr):
+    """An upload with no licence fields at all (say, a holiday photo) gets a helpful warning."""
     empty = make_licence(**{name: fv(None) for name in CORE_FIELDS}, other_fields={})
     monkeypatch.setattr(base, "get_provider", lambda model=None: FakeProvider(data=empty))
     warnings = client.post(f"/api/documents/{uploaded}/extract").json()["warnings"]
@@ -340,6 +366,7 @@ def test_extract_warns_when_no_licence_fields_found(client, uploaded, monkeypatc
 
 
 def test_large_images_are_downscaled_for_the_llm_only(client, fake_provider, fake_ocr):
+    """A large image is shrunk to 2048 px for the AI only. The stored image keeps its full size."""
     doc_id = upload(client, image_bytes(size=(3000, 1500))).json()["doc_id"]
     client.post(f"/api/documents/{doc_id}/extract")
 
@@ -353,6 +380,8 @@ def test_large_images_are_downscaled_for_the_llm_only(client, fake_provider, fak
 
 
 def test_compare_models_prints_diff_table(tmp_path, monkeypatch, capsys):
+    """The compare script runs each sample through both models and prints where they agree and differ."""
+    # The script is not part of the app package, so it is loaded straight from its file.
     spec = importlib.util.spec_from_file_location("compare_models", BACKEND_DIR / "scripts" / "compare_models.py")
     script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(script)
@@ -381,6 +410,7 @@ def test_compare_models_prints_diff_table(tmp_path, monkeypatch, capsys):
 
 
 def test_prompt_names_date_labels_and_asks_for_them_in_the_source():
+    """The prompt tells the model which printed labels mean which date, and to copy the label with the date."""
     from app.services.providers.base import EXTRACTION_USER_PROMPT
 
     for label in ("DOI / Date of Issue", "Valid Till / Validity", "DOB / Date of Birth"):
@@ -389,6 +419,7 @@ def test_prompt_names_date_labels_and_asks_for_them_in_the_source():
 
 
 def test_prompt_asks_for_separate_per_class_dates_only_when_printed():
+    """The prompt asks for each vehicle class's own dates, and only when the card prints such a table."""
     from app.services.providers.base import EXTRACTION_USER_PROMPT
 
     assert '"<class>_date_of_issue" and "<class>_valid_till"' in EXTRACTION_USER_PROMPT
@@ -410,12 +441,14 @@ def test_prompt_asks_for_separate_per_class_dates_only_when_printed():
     ],
 )
 def test_find_date_reads_dates_inside_labelled_text(text, iso):
+    """A date is found inside labelled text such as "DOI: 16-06-2019"."""
     from app.services.extraction import find_date
 
     assert find_date(text) == iso
 
 
 def test_merge_accepts_labelled_date_sources():
+    """A source text that includes its label is still confirmed, and can rescue a value the model garbled."""
     data = make_licence(
         date_of_issue=fv("2019-06-16", "DOI : 16-06-2019"),
         date_of_expiry=fv("not a date", "Valid Till : 15-06-2034"),  # value recovered from the source
@@ -430,6 +463,7 @@ def test_merge_accepts_labelled_date_sources():
 
 
 def test_swapped_issue_and_expiry_are_flagged():
+    """Issue and expiry swapped: both are printed on the card, so only the order check can catch it."""
     data = make_licence(date_of_issue=fv("2034-06-15", "15-06-2034"), date_of_expiry=fv("2019-06-16", "16-06-2019"))
     merged, warnings = merge(data, CANNED_OCR_TEXT)
     assert merged.date_of_issue.confidence == merged.date_of_expiry.confidence == "review"
@@ -438,6 +472,7 @@ def test_swapped_issue_and_expiry_are_flagged():
 
 
 def test_birth_after_issue_and_future_issue_are_flagged():
+    """A birth date after the issue date, or an issue date in the future, is sent back for review."""
     data = make_licence(date_of_birth=fv("2020-01-01", "01-01-2020"))
     merged, warnings = merge(data, CANNED_OCR_TEXT)
     assert merged.date_of_birth.confidence == merged.date_of_issue.confidence == "review"
@@ -449,6 +484,7 @@ def test_birth_after_issue_and_future_issue_are_flagged():
 
 
 def test_per_class_dates_are_normalised_and_order_checked():
+    """Each vehicle class's dates get the same treatment, and a warning names the class it is about."""
     other = {
         "lmv_date_of_issue": fv("16-06-2019", "LMV 16-06-2019 15-06-2034"),
         "lmv_valid_till": fv("2034-06-15", "LMV 16-06-2019 15-06-2034"),

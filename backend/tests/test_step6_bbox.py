@@ -14,6 +14,7 @@ from app.schemas import Box
 
 pytestmark = [pytest.mark.phase2, pytest.mark.step6]
 
+# A small made-up card for the matching tests: four printed lines and their word positions.
 LINES = ["Name : JOHN DOE", "DL No: MH12 20190001234", "Address : Flat 302, Sai Residency,", "Pune - 411052"]
 WORDS = words_from_lines(LINES, x0=10, y0=10, line_h=40, char_w=10, h=20)
 
@@ -38,6 +39,7 @@ def test_bbox_matching():
 
 
 def test_bbox_multiline_address_covers_all_lines():
+    """An address printed over two lines gets one box that covers both lines."""
     from app.services.extraction import match_bbox
 
     box = match_bbox("Flat 302, Sai Residency,\nPune - 411052", WORDS)
@@ -46,6 +48,7 @@ def test_bbox_multiline_address_covers_all_lines():
 
 
 def test_bbox_ignores_punctuation_and_case():
+    """Case and punctuation never matter, and a lone ":" between label and value does not break a match."""
     from app.services.extraction import match_bbox
 
     assert match_bbox("mh12 20190001234.", WORDS) == box_of("MH12", "20190001234")
@@ -54,6 +57,7 @@ def test_bbox_ignores_punctuation_and_case():
 
 
 def test_bbox_graceful_none():
+    """Nothing to look for, or nothing to look in, gives None instead of an error."""
     from app.services.extraction import match_bbox
 
     assert match_bbox(None, WORDS) is None
@@ -63,6 +67,7 @@ def test_bbox_graceful_none():
 
 
 def test_merge_fills_field_boxes_from_ocr_words():
+    """merge gives each field its box, and none to a value that is not on the card or is empty."""
     from app.services.extraction import merge
 
     data = make_licence(issuing_authority=fv("NOT ON THE CARD"), vehicle_classes=fv(None))
@@ -74,6 +79,7 @@ def test_merge_fills_field_boxes_from_ocr_words():
 
 
 def test_extract_endpoint_returns_boxes_inside_the_image(client, extracted):
+    """Through the API: nearly every field gets a box, and every box lies inside the image."""
     data = client.get(f"/api/documents/{extracted}/extract").json()["data"]
     boxes = [f["bbox"] for f in [*(v for k, v in data.items() if k != "other_fields"), *data["other_fields"].values()]]
     found = [b for b in boxes if b]
@@ -84,6 +90,7 @@ def test_extract_endpoint_returns_boxes_inside_the_image(client, extracted):
 
 
 def test_chat_sources_carry_boxes(client, extracted, monkeypatch):
+    """Chat sources can be highlighted too: field sources always, document-text sources when they are found."""
     from app.services import rag
 
     async def reply(client_, model, messages):
@@ -106,6 +113,7 @@ TABLE_WORDS = words_from_lines(TABLE_LINES, x0=20, y0=300, line_h=30, char_w=10,
 
 
 def test_table_column_highlights_the_cells_ocr_could_read():
+    """A column value ("LMV, MCWG") is never one run of words, so each part is located on its own."""
     from app.services.extraction import match_bbox, match_bbox_parts
 
     assert match_bbox("LMV\nMCWG", TABLE_WORDS) is None  # never consecutive, LMV unread
@@ -114,6 +122,7 @@ def test_table_column_highlights_the_cells_ocr_could_read():
 
 
 def test_part_fallback_guards():
+    """The part-by-part fallback stays out of the way: single values, very short parts, nothing found, None."""
     from app.services.extraction import match_bbox_parts
 
     assert match_bbox_parts("MCWG", TABLE_WORDS) is None  # a single part is not a fallback case
@@ -123,6 +132,7 @@ def test_part_fallback_guards():
 
 
 def test_merge_uses_part_fallback_only_when_whole_value_fails():
+    """The fallback is used only after the normal match fails, and a half-found value stays under review."""
     from app.services.extraction import merge
 
     data = make_licence(vehicle_classes=fv("LMV, MCWG", "LMV\nMCWG"))
@@ -146,6 +156,7 @@ def row_box(line, words=TABLE_WORDS):
 
 
 def test_per_class_dates_are_anchored_on_their_own_row():
+    """A class's date is looked up on that class's table row, and confirmed only if it is printed there."""
     from app.services.extraction import merge
 
     other = {
@@ -162,6 +173,7 @@ def test_per_class_dates_are_anchored_on_their_own_row():
 
 
 def test_labelled_date_source_highlights_label_and_date():
+    """A source such as "DOI: 16-06-2019" highlights the label together with the date."""
     from app.services.extraction import match_bbox
 
     assert match_bbox("DOI: 16-06-2019", CANNED_WORDS) == box_of("DOI", "16-06-2019", words=CANNED_WORDS)
@@ -178,6 +190,7 @@ MANY_ROWS = {
 
 
 def many_class_merge(rows):
+    """Build a class table from `rows`, run merge on it, and return the per-class fields and the words."""
     from app.services.extraction import merge
 
     lines = ["Class of Vehicle DOI Valid Till", *rows.values()]
@@ -192,6 +205,7 @@ def many_class_merge(rows):
 
 
 def test_similar_class_codes_each_anchor_on_their_own_row():
+    """LMV, LMV NT, LMV TR, MCWG and MCWOG look alike, yet each finds exactly its own row."""
     fields, words = many_class_merge(MANY_ROWS)
     for i, cls in enumerate(MANY_ROWS, start=1):  # line 0 is the header
         for kind in ("date_of_issue", "valid_till"):
@@ -201,6 +215,7 @@ def test_similar_class_codes_each_anchor_on_their_own_row():
 
 
 def test_garbled_class_code_gets_no_box_instead_of_a_similar_row():
+    """When OCR garbles a class code, the field gets no box rather than the box of a similar-looking class."""
     rows = {**MANY_ROWS, "mcwg": "MCW6 05-06-2015 04-06-2035"}  # OCR misread; MCWOG is 0.89 similar
     fields, _ = many_class_merge(rows)
     assert fields["mcwg_valid_till"].bbox is None
@@ -209,6 +224,7 @@ def test_garbled_class_code_gets_no_box_instead_of_a_similar_row():
 
 
 def test_fields_on_the_back_page_report_page_2():
+    """In a two-page PDF, a field found below the page break reports page 2."""
     from app.services.extraction import merge, page_of
 
     assert page_of(None, [0, 500]) == 1
@@ -223,6 +239,7 @@ def test_fields_on_the_back_page_report_page_2():
 
 
 def test_rows_are_found_by_position_even_when_ocr_splits_the_cells():
+    """Rows are rebuilt from where the words are, not from Tesseract's line numbers, which break in tables."""
     from app.services.extraction import merge
 
     rows = {"mcwg": "MCWG 05-06-2015 04-06-2035", "lmv": "LMV 10-11-2016 09-11-2036"}
@@ -236,6 +253,7 @@ def test_rows_are_found_by_position_even_when_ocr_splits_the_cells():
 
 
 def test_side_by_side_cards_do_not_mix_rows():
+    """Front and back photographed side by side: text at the same height on the other card is not mixed in."""
     from app.services.extraction import merge
 
     front = words_from_lines(["DOB : 03-09-1992"], x0=20, y0=250)
@@ -248,6 +266,7 @@ def test_side_by_side_cards_do_not_mix_rows():
 
 
 def test_multi_part_values_are_confirmed_part_by_part():
+    """A multi-part value is confirmed only when every part is printed, as a whole word."""
     from app.services.extraction import parts_match_ocr
 
     table = "Class of Vehicle DOI Valid Till\nLMV 16-06-2019 15-06-2034\nMCWG 16-06-2019 15-06-2034"

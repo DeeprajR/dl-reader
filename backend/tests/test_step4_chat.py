@@ -13,6 +13,7 @@ REFUSAL = "The document does not contain this information."
 
 
 def ask(client, doc_id, question):
+    """POST a question to the document's chat, and return the response."""
     return client.post(f"/api/documents/{doc_id}/chat", json={"question": question})
 
 
@@ -54,6 +55,7 @@ def test_chat_refusal(client, extracted, monkeypatch):
     ],
 )
 def test_llm_refusals_are_normalised_to_the_exact_string(client, extracted, monkeypatch, reply):
+    """However the model words its refusal, the user sees the exact required sentence, with no sources."""
     received = llm_replies(monkeypatch, reply)
     response = ask(client, extracted, "What is the licence holder's phone number?")
     assert received, "question should pass the relevance gate and reach the LLM"
@@ -61,6 +63,7 @@ def test_llm_refusals_are_normalised_to_the_exact_string(client, extracted, monk
 
 
 def test_grounded_answer_with_sources(client, extracted, monkeypatch):
+    """A real answer comes with 1-5 sources, and the model received the rules plus numbered excerpts."""
     received = llm_replies(monkeypatch, 'The licence number is MH12 20190001234 ("DL No: MH12 20190001234").')
     response = ask(client, extracted, "What is the licence number?")
     assert response.status_code == 200
@@ -80,6 +83,7 @@ def test_grounded_answer_with_sources(client, extracted, monkeypatch):
 
 
 def test_chat_uses_chat_model_setting(client, extracted, monkeypatch):
+    """The chat uses LLM_CHAT_MODEL when it is set, and the extraction model otherwise."""
     models = []
 
     async def fake_complete(client_, model, messages):
@@ -94,6 +98,7 @@ def test_chat_uses_chat_model_setting(client, extracted, monkeypatch):
 
 
 def test_chat_provider_failure_is_clean_502(client, extracted, monkeypatch):
+    """When the AI fails, the chat shows a clear 502 message."""
     from app.services.providers.base import ProviderError
 
     async def failing(client_, model, messages):
@@ -109,6 +114,7 @@ def test_chat_provider_failure_is_clean_502(client, extracted, monkeypatch):
 
 
 def test_question_length_is_capped_at_1000(client, extracted, monkeypatch):
+    """A 1000-character question is accepted, and 1001 is rejected with a message naming the limit."""
     llm_replies(monkeypatch, "ok")
     assert ask(client, extracted, "x" * 1000).status_code == 200
     response = ask(client, extracted, "x" * 1001)
@@ -117,11 +123,13 @@ def test_question_length_is_capped_at_1000(client, extracted, monkeypatch):
 
 @pytest.mark.parametrize("body", [{"question": "   "}, {}, {"question": 5}])
 def test_invalid_questions_are_rejected(client, extracted, body):
+    """A blank, missing or non-text question is a 422."""
     response = client.post(f"/api/documents/{extracted}/chat", json=body)
     assert response.status_code == 422 and response.json()["error"]
 
 
 def test_chat_requires_an_extraction(client, uploaded):
+    """A document that has not been read yet cannot be asked about (409)."""
     response = ask(client, uploaded, "What is the licence number?")
     assert response.status_code == 409
 
@@ -130,6 +138,7 @@ def test_chat_requires_an_extraction(client, uploaded):
 
 
 def test_ocr_chunks_are_about_200_chars_with_overlap():
+    """Chunks stay under 200 characters, overlap by one line, lose no text, and split an over-long line."""
     lines = [f"line {i:02d} " + "x" * 50 for i in range(12)]
     chunks = rag.chunk_ocr_text("\n".join(lines))
     assert len(chunks) > 1
@@ -143,6 +152,7 @@ def test_ocr_chunks_are_about_200_chars_with_overlap():
 
 
 def test_field_chunk_format():
+    """The search text of a field: its name, its value, and its source on a single line."""
     from conftest import fv
 
     assert rag.field_chunk("full_name", fv("JOHN DOE")) == "Field: full_name = JOHN DOE (source: 'JOHN DOE')"
@@ -151,6 +161,7 @@ def test_field_chunk_format():
 
 
 def test_extraction_indexes_ocr_chunks_and_fields(client, extracted):
+    """After extraction the index holds every text chunk plus one chunk per filled field."""
     result = ExtractionResult.model_validate(client.get(f"/api/documents/{extracted}/extract").json())
     stored = rag._chroma().get_collection(f"doc_{extracted}").get(include=["documents", "metadatas"])
 
@@ -161,6 +172,7 @@ def test_extraction_indexes_ocr_chunks_and_fields(client, extracted):
 
 
 def test_reindexing_is_idempotent_and_saved_edits_reach_chat(client, extracted):
+    """Re-reading a document does not duplicate its chunks, and a saved edit is what the chat finds next."""
     collection = lambda: rag._chroma().get_collection(f"doc_{extracted}")  # noqa: E731
     count = collection().count()
 
@@ -176,18 +188,21 @@ def test_reindexing_is_idempotent_and_saved_edits_reach_chat(client, extracted):
 
 
 def test_chat_builds_a_missing_index_on_demand(client, extracted, monkeypatch):
+    """If the index is missing, asking a question builds it first."""
     rag._chroma().delete_collection(f"doc_{extracted}")
     llm_replies(monkeypatch, "The licence number is MH12 20190001234.")
     assert ask(client, extracted, "What is the licence number?").json()["sources"]
 
 
 def test_retrieval_ranks_the_matching_chunk_first(client, extracted):
+    """The passage that holds the answer comes first, within the relevance limit."""
     top = rag.retrieve(extracted, "licence_number MH12 20190001234")[0]
     assert "MH12 20190001234" in top["text"]
     assert 0 <= top["distance"] <= rag.MAX_DISTANCE
 
 
 def test_class_validity_summary_chunk():
+    """The all-classes summary lists every class with its dates, and says so when a date is not printed."""
     from conftest import fv, make_licence
 
     data = make_licence(other_fields={
@@ -202,6 +217,7 @@ def test_class_validity_summary_chunk():
 
 
 def test_summary_chunk_is_indexed_only_when_classes_have_dates(client, extracted):
+    """The summary is added to the index only when the licence has per-class dates."""
     documents = rag._chroma().get_collection(f"doc_{extracted}").get()["documents"]
     assert not any(d.startswith("Vehicle class validity") for d in documents)  # canned licence has none
 
@@ -216,6 +232,7 @@ def test_summary_chunk_is_indexed_only_when_classes_have_dates(client, extracted
 
 
 def test_date_facts_are_calculated_from_the_form_dates():
+    """Days left, expired, age and years held are worked out correctly, including the edge days."""
     from datetime import date
 
     from conftest import fv, make_licence
@@ -240,6 +257,7 @@ def test_date_facts_are_calculated_from_the_form_dates():
 
 
 def test_days_until_expiry_is_answered_from_the_calculated_excerpt(client, extracted, monkeypatch):
+    """A days-left question gives the model the app's numbers, and they come back as a Calculated source."""
     received = llm_replies(monkeypatch, 'The licence expires in 2825 days ("15-06-2034").')
     response = client.post(
         f"/api/documents/{extracted}/chat",
@@ -260,6 +278,7 @@ def test_days_until_expiry_is_answered_from_the_calculated_excerpt(client, extra
 
 
 def test_other_questions_do_not_get_the_calculated_excerpt(client, extracted, monkeypatch):
+    """A question that is not about time never gets the calculated excerpt."""
     received = llm_replies(monkeypatch, 'The licence number is MH12 20190001234 ("DL No: MH12 20190001234").')
     response = ask(client, extracted, "What is the licence number?")
     assert "(calculated)" not in received[0][1]["content"]
@@ -267,6 +286,7 @@ def test_other_questions_do_not_get_the_calculated_excerpt(client, extracted, mo
 
 
 def test_calculated_excerpt_passes_the_same_relevance_gate(client, extracted, monkeypatch):
+    """An unrelated question is still refused, even when it uses time words."""
     far = {"text": "Calculated on ...", "origin": "calculated", "bbox": None, "distance": 0.97}
     monkeypatch.setattr(rag, "retrieve", lambda doc_id, question, k=5: [])
     monkeypatch.setattr(rag, "calculated_chunk", lambda data, question, today: far)
@@ -275,6 +295,7 @@ def test_calculated_excerpt_passes_the_same_relevance_gate(client, extracted, mo
 
 
 def test_browser_date_is_used_only_when_plausible():
+    """The browser's date is trusted within one day of the server's, which covers every time zone."""
     from datetime import date, timedelta
 
     from app.routes import chat

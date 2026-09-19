@@ -17,6 +17,8 @@ REPO_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(REPO_DIR / ".env")
 
+# The imports below come after load_dotenv on purpose (hence "noqa: E402"), so the settings
+# from .env are in place before any module of the app is imported.
 from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
@@ -49,6 +51,7 @@ class LocalhostLink(logging.Filter):
 
 logging.getLogger("uvicorn.error").addFilter(LocalhostLink())
 
+# Where `npm run build` puts the frontend. It exists in the Docker image, and locally after a build.
 FRONTEND_DIST = REPO_DIR / "frontend" / "dist"
 
 
@@ -56,6 +59,7 @@ def check_ollama(models: set[str]) -> None:
     """Warn (don't fail) if the local Ollama server or a configured model is missing."""
     url = ollama.ollama_url()
     try:
+        # /api/tags lists the models Ollama has downloaded.
         tags = httpx.get(f"{url}/api/tags", timeout=3).json()
         installed = {m.get("name", "") for m in tags.get("models", [])}
     except Exception:
@@ -63,6 +67,7 @@ def check_ollama(models: set[str]) -> None:
                        "to an OpenRouter model.", url)
         return
     for model in models:
+        # Ollama names models "name:tag". A setting without a tag matches any tag of that name.
         if not any(name == model or name.split(":")[0] == model for name in installed):
             logger.warning("Ollama has no model '%s'. Run `ollama pull %s`.", model, model)
 
@@ -79,9 +84,11 @@ def startup_checks() -> None:
         logger.critical(message)
         raise RuntimeError(message)
     logger.info("Extraction model: %s | chat model: %s", *models)
+    # A missing Ollama server or model is only a warning: it can be started after the app.
     if any(is_local(m) for m in models):
         check_ollama({m.removeprefix(OLLAMA_PREFIX) for m in models if is_local(m)})
 
+    # Tesseract and poppler are optional at startup. Without them the app still runs, with less.
     try:
         logger.info("Tesseract %s found", ocr.tesseract_version())
     except Exception:
@@ -97,6 +104,7 @@ def startup_checks() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Runs once when the server starts: check the settings, open the database, load the search model."""
     startup_checks()
     storage.init()
     rag.warm_up()
@@ -105,6 +113,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Driving Licence Reader", lifespan=lifespan)
 
+# Lets the Vite dev server's pages (port 5173) call this API (port 8000) directly. Normally
+# the dev server forwards /api itself, and in Docker both share one port, so this is a fallback.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -113,15 +123,24 @@ app.add_middleware(
 )
 
 
+# --- error handling -----------------------------------------------------------------------------
+# Every error leaves the API in one shape, {"error": "message"}, so the frontend can always
+# show `error` to the user.
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Errors raised on purpose with HTTPException (400, 404, 502, ...)."""
     return JSONResponse({"error": str(exc.detail)}, status_code=exc.status_code, headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """A request body that does not match the model, for example a missing `question`.
+
+    FastAPI reports a list of problems; they are joined into one readable sentence.
+    """
     problems = []
     for err in exc.errors():
+        # `loc` is the path to the bad value, e.g. ("body", "question"). The leading "body" is dropped.
         loc = ".".join(str(p) for p in err.get("loc", ())[1:])
         problems.append(f"{loc}: {err.get('msg')}" if loc else str(err.get("msg")))
     return JSONResponse({"error": "Invalid request: " + "; ".join(problems)}, status_code=422)
@@ -129,6 +148,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Anything unexpected. The user gets a generic message. Only the error's type is logged, never
+    its text, because that text could contain personal data from a licence.
+    """
     logger.error("Unhandled error on %s %s: %s", request.method, request.url.path, type(exc).__name__)
     return JSONResponse({"error": "An unexpected server error occurred."}, status_code=500)
 

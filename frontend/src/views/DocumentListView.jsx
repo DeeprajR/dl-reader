@@ -3,6 +3,7 @@ import { api } from '../api.js'
 import { navigate } from '../router.js'
 import ErrorMessage from '../components/ErrorMessage.jsx'
 
+// The upload time in the user's own language and time zone. An unreadable value is shown as it is.
 function formatDate(iso) {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
@@ -13,6 +14,7 @@ export default function DocumentListView() {
   const [docs, setDocs] = useState(null)
   const [error, setError] = useState(null)
 
+  // Fetch the list. Also used by the Retry button after an error.
   const load = useCallback(() => {
     setError(null)
     api
@@ -45,6 +47,7 @@ export default function DocumentListView() {
         <h2 className="px-6 pt-5 pb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Your documents
         </h2>
+        {/* The list area shows one of four things: an error, "Loading", the empty state, or the documents. */}
         {error && (
           <div className="px-6 pb-6">
             <ErrorMessage message={error} onRetry={load} />

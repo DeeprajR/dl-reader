@@ -14,6 +14,7 @@ pytestmark = [pytest.mark.phase1, pytest.mark.step5]
 
 
 def test_startup_fails_fast_without_api_key(monkeypatch, tmp_path):
+    """Without an API key the server refuses to start, with a message that says how to fix it."""
     from fastapi.testclient import TestClient
 
     monkeypatch.delenv("OPENROUTER_API_KEY")
@@ -31,6 +32,7 @@ def test_startup_fails_fast_without_api_key(monkeypatch, tmp_path):
     [("0.0.0.0", "http://localhost:7860"), ("127.0.0.1", "http://127.0.0.1:7860")],
 )
 def test_startup_message_shows_an_openable_address(caplog, host, shown):
+    """The startup line shows localhost, never 0.0.0.0, and other addresses are left alone."""
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         logging.getLogger("uvicorn.error").info("Uvicorn running on %s://%s:%d", "http", host, 7860)
     assert shown in caplog.text
@@ -38,6 +40,7 @@ def test_startup_message_shows_an_openable_address(caplog, host, shown):
 
 
 def test_startup_only_warns_when_ocr_tools_are_missing(monkeypatch, caplog):
+    """Missing Tesseract or poppler is a warning, not a crash: the app still starts."""
     def missing():
         raise FileNotFoundError("tesseract")
 
@@ -50,6 +53,7 @@ def test_startup_only_warns_when_ocr_tools_are_missing(monkeypatch, caplog):
 
 
 def test_unhandled_errors_return_generic_json_without_details(monkeypatch, tmp_path):
+    """An unexpected error gives a generic 500 message: no file paths and no stack trace leak out."""
     from fastapi.testclient import TestClient
 
     def explode():
@@ -65,12 +69,14 @@ def test_unhandled_errors_return_generic_json_without_details(monkeypatch, tmp_p
 
 
 def test_validation_errors_are_readable_json(client, uploaded):
+    """A malformed request body gives a readable 422, not FastAPI's raw error list."""
     response = client.post(f"/api/documents/{uploaded}/chat", data="not json", headers={"Content-Type": "application/json"})
     assert response.status_code == 422
     assert response.json()["error"].startswith("Invalid request")
 
 
 def test_api_key_is_never_logged(client, uploaded, fake_provider, fake_ocr, monkeypatch, caplog):
+    """Security: a full run (startup, extract, chat) at DEBUG level never writes the API key to the log."""
     from app.services import rag
 
     async def reply(client_, model, messages):
@@ -86,6 +92,7 @@ def test_api_key_is_never_logged(client, uploaded, fake_provider, fake_ocr, monk
 
 
 def test_env_example_lists_every_setting_with_spec_defaults():
+    """.env.example lists every setting, with the defaults the specification gives."""
     lines = (REPO_DIR / "backend" / ".env.example").read_text(encoding="utf-8").splitlines()
     settings = dict(line.split("=", 1) for line in lines if line and not line.startswith("#"))
     assert settings == {
@@ -100,12 +107,14 @@ def test_env_example_lists_every_setting_with_spec_defaults():
 
 
 def test_gitignore_keeps_secrets_pii_and_build_output_out():
+    """Secrets, licence documents and build output are all git-ignored."""
     entries = {line.strip() for line in (REPO_DIR / ".gitignore").read_text(encoding="utf-8").splitlines()}
     for required in (".env", "data/", "chroma/", "samples/", "node_modules/", "__pycache__/", "dist/"):
         assert required in entries, required
 
 
 def test_no_documents_or_secrets_are_tracked_by_git():
+    """Security: no image, PDF, database or .env file has been committed to the repository."""
     if not shutil.which("git") or not (REPO_DIR / ".git").exists():
         pytest.skip("not a git checkout")
     tracked = subprocess.run(

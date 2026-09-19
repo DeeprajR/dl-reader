@@ -39,6 +39,9 @@ from app.schemas import FieldValue, LicenceData  # noqa: E402
 
 # --- canned document -------------------------------------------------------------------------
 
+# One made-up licence is used by most tests. It exists in three matching forms: the printed
+# lines (what OCR reads), the word positions (what OCR locates), and `make_licence` (what the
+# AI model returns). Because the three agree, a test can change one and watch what the app does.
 IMAGE_SIZE = (800, 500)
 CANNED_LINES = [
     "DRIVING LICENCE",
@@ -68,16 +71,21 @@ def words_from_lines(lines, x0=20, y0=20, line_h=40, char_w=12, h=24):
     return words
 
 
+# The word positions and the full text, exactly as `run_ocr` would return them for this card.
 CANNED_WORDS = words_from_lines(CANNED_LINES)
 CANNED_OCR_TEXT = "\n".join(" ".join(line.split()) for line in CANNED_LINES)
 
 
 def fv(value, source=...):
     """FieldValue as a provider returns it (confidence/bbox are set later by the merge)."""
+    # `...` means "not given": the source text is then the value itself. `None` is a real choice: no source text.
     return FieldValue(value=value, source_text=value if source is ... else source, confidence="review", bbox=None)
 
 
 def make_licence(**overrides) -> LicenceData:
+    """The AI model's answer for the canned licence. Pass a field by name to replace it, for example
+    `make_licence(full_name=fv("JANE ROE"))` for a name that is not printed on the card.
+    """
     fields = dict(
         full_name=fv("JOHN DOE"),
         licence_number=fv("MH12 20190001234"),
@@ -99,21 +107,29 @@ class FakeProvider:
     def __init__(self, data: LicenceData | None = None, error: Exception | None = None):
         self.data = data or make_licence()
         self.error = error
+        # Every (image, media type) the app sent, so a test can check what the LLM would have received.
         self.calls: list[tuple[bytes, str]] = []
 
     async def extract(self, image_bytes: bytes, media_type: str) -> LicenceData:
         self.calls.append((image_bytes, media_type))
         if self.error:
             raise self.error
+        # A copy, so the app cannot change the data held by the test.
         return self.data.model_copy(deep=True)
 
 
 # --- file builders ---------------------------------------------------------------------------
 
+# The eight bytes every PNG file starts with.
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def image_bytes(size=IMAGE_SIZE, fmt="PNG", color="white", exif_orientation=None) -> bytes:
+    """A blank image file of the given format, built in memory.
+
+    `exif_orientation` adds the camera's "rotate me" tag (6 = turn 90 degrees), to test that the
+    app turns such photos upright.
+    """
     img = Image.new("RGB", size, color)
     buf = io.BytesIO()
     if exif_orientation is not None:
@@ -126,16 +142,19 @@ def image_bytes(size=IMAGE_SIZE, fmt="PNG", color="white", exif_orientation=None
 
 
 def pdf_bytes(size=(850, 1100)) -> bytes:
+    """A blank one-page PDF, built in memory."""
     buf = io.BytesIO()
     Image.new("RGB", size, "white").save(buf, "PDF")
     return buf.getvalue()
 
 
 def upload(client, content: bytes, filename="licence.png", mime="image/png"):
+    """POST a file to /api/documents the way the browser does, and return the response."""
     return client.post("/api/documents", files={"file": (filename, content, mime)})
 
 
 def poppler_available() -> bool:
+    """True when poppler is installed. The tests that render a PDF are skipped without it."""
     poppler_dir = os.getenv("POPPLER_PATH")
     if poppler_dir and Path(poppler_dir).is_dir():
         return shutil.which("pdftoppm", path=poppler_dir) is not None
@@ -144,6 +163,9 @@ def poppler_available() -> bool:
 
 # --- fake embeddings -------------------------------------------------------------------------
 
+# The real embedding model is 90 MB and slow to load, so the tests use a stand-in: each word
+# adds 1 to a position chosen by hashing the word. Texts that share words come out close, which
+# is all the search tests need.
 EMBED_DIM = 256
 
 
@@ -154,7 +176,9 @@ def fake_embed(texts: list[str]) -> list[list[float]]:
         v = [0.0] * EMBED_DIM
         v[0] = 0.1  # never a zero vector
         for token in re.findall(r"[a-z0-9]+", text.lower()):
+            # md5 is used only to spread words evenly over the positions (nothing here is secret).
             v[1 + int(hashlib.md5(token.encode()).hexdigest(), 16) % (EMBED_DIM - 1)] += 1.0
+        # Scale to length 1, as the real model's embeddings are.
         norm = math.sqrt(sum(x * x for x in v))
         vectors.append([x / norm for x in v])
     return vectors
@@ -165,6 +189,7 @@ def fake_embed(texts: list[str]) -> list[list[float]]:
 
 @pytest.fixture(scope="session")
 def chroma_client():
+    """One in-memory ChromaDB for the whole test run. Nothing is written to disk."""
     import chromadb
     from chromadb.config import Settings
 
@@ -177,6 +202,7 @@ def offline(monkeypatch, chroma_client):
     from app.services import rag
     from app.services.providers import openrouter
 
+    # A test that reaches the real LLM by mistake fails at once, instead of spending money.
     async def no_real_llm(*args, **kwargs):
         raise AssertionError("tests must not call the real LLM")
 
@@ -202,6 +228,7 @@ def client(tmp_path):
 
 @pytest.fixture
 def fake_provider(monkeypatch):
+    """Makes /extract use a FakeProvider. Returned so a test can set its `data` or `error`."""
     from app.services.providers import base
 
     provider = FakeProvider()
@@ -211,6 +238,7 @@ def fake_provider(monkeypatch):
 
 @pytest.fixture
 def fake_ocr(monkeypatch):
+    """Makes OCR return the canned text and words, so no test needs Tesseract to read a real image."""
     from app.services import ocr
 
     result = ocr.OcrResult(text=CANNED_OCR_TEXT, words=[dict(w) for w in CANNED_WORDS])

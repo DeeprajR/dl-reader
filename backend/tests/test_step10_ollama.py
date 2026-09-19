@@ -27,6 +27,7 @@ pytestmark = [pytest.mark.phase2, pytest.mark.step10]
 
 
 def licence_reply() -> str:
+    """The JSON reply a local model would send for the canned licence."""
     data = make_licence().model_dump()
     return json.dumps({k: ({"value": v["value"], "source_text": v["source_text"]} if k != "other_fields" else {})
                        for k, v in data.items()})
@@ -38,6 +39,7 @@ def fake_ollama(monkeypatch, *replies, status=200):
 
     requests = []
 
+    # Stands in for the Ollama server: records each request and answers with the next scripted reply.
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
         if status != 200:
@@ -49,16 +51,19 @@ def fake_ollama(monkeypatch, *replies, status=200):
 
 
 def extract(provider):
+    """Run the provider on a tiny image."""
     return asyncio.run(provider.extract(image_bytes((40, 30)), "image/png"))
 
 
 def test_factory_routes_ollama_models():
+    """A model named "ollama/<name>" gets the Ollama provider, with the prefix removed."""
     provider = get_provider("ollama/qwen2.5vl")
     assert type(provider).__name__ == "OllamaProvider"
     assert provider.model == "qwen2.5vl"
 
 
 def test_unreachable_ollama_is_a_clean_error():
+    """When Ollama is not running, the user gets advice on what to do, not a crash."""
     from app.services.providers.ollama import OllamaProvider
 
     provider = OllamaProvider("qwen2.5vl", base_url="http://127.0.0.1:9")  # nothing listens here
@@ -68,6 +73,7 @@ def test_unreachable_ollama_is_a_clean_error():
 
 
 def test_request_uses_the_same_prompt_with_the_image(monkeypatch):
+    """The local model gets the same prompt as the cloud model, the image, and JSON mode switched on."""
     requests = fake_ollama(monkeypatch, licence_reply())
     data = extract(get_provider("ollama/qwen2.5vl"))
     assert data.full_name.value == "JOHN DOE"
@@ -80,6 +86,7 @@ def test_request_uses_the_same_prompt_with_the_image(monkeypatch):
 
 
 def test_invalid_json_is_retried_once_with_the_retry_prompt(monkeypatch):
+    """The one-retry rule for invalid JSON applies to the local model too."""
     requests = fake_ollama(monkeypatch, "not json", licence_reply())
     assert extract(get_provider("ollama/qwen2.5vl")).licence_number.value == "MH12 20190001234"
     assert len(requests) == 2
@@ -87,6 +94,7 @@ def test_invalid_json_is_retried_once_with_the_retry_prompt(monkeypatch):
 
 
 def test_missing_model_is_a_clean_error(monkeypatch):
+    """A model that has not been downloaded gives the exact `ollama pull` command, and is not retried."""
     requests = fake_ollama(monkeypatch, status=404)
     with pytest.raises(ProviderError, match="ollama pull qwen2.5vl"):
         extract(get_provider("ollama/qwen2.5vl"))
@@ -94,6 +102,7 @@ def test_missing_model_is_a_clean_error(monkeypatch):
 
 
 def test_local_chat_model_keeps_chat_on_ollama(client, extracted, monkeypatch):
+    """With a local chat model, chat questions go to Ollama and nothing is sent to OpenRouter."""
     from app.services.providers import ollama
 
     calls = []
@@ -109,6 +118,7 @@ def test_local_chat_model_keeps_chat_on_ollama(client, extracted, monkeypatch):
 
 
 def test_all_local_setup_starts_without_openrouter_key(monkeypatch, caplog):
+    """An all-local setup needs no API key. As soon as one model is a cloud model, the key is required again."""
     from app import main
 
     monkeypatch.setenv("LLM_MODEL", "ollama/qwen2.5vl")
@@ -124,5 +134,6 @@ def test_all_local_setup_starts_without_openrouter_key(monkeypatch, caplog):
 
 
 def test_readme_documents_the_local_option():
+    """The README explains the local, no-data-leaves-the-machine option."""
     readme = (REPO_DIR / "README.md").read_text(encoding="utf-8").lower()
     assert "ollama" in readme and "pii" in readme and "ollama_host" in readme

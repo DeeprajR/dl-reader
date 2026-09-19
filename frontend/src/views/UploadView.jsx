@@ -26,6 +26,7 @@ export default function UploadView() {
   const [uploading, setUploading] = useState(null) // file name while uploading
   const [error, setError] = useState(null)
 
+  // Check the chosen or dropped file, upload it, and open its workspace.
   async function handleFiles(files) {
     if (uploading || !files?.length) return
     if (files.length > 1) {
@@ -49,6 +50,7 @@ export default function UploadView() {
     }
   }
 
+  // preventDefault stops the browser from opening the dropped file itself.
   function onDrop(e) {
     e.preventDefault()
     setDragging(false)
@@ -68,6 +70,8 @@ export default function UploadView() {
           </p>
         </div>
 
+        {/* The drop zone. It is a div, so it is given a button's role, a tab stop and Enter/Space */}
+        {/* handling to work from the keyboard too. The real file input inside it is hidden. */}
         <div
           role="button"
           tabIndex={0}
@@ -116,6 +120,7 @@ export default function UploadView() {
             className="hidden"
             onChange={(e) => {
               handleFiles(e.target.files)
+              // Clear the input, so choosing the same file again still fires onChange.
               e.target.value = ''
             }}
           />

@@ -10,6 +10,7 @@ pytestmark = [pytest.mark.phase1, pytest.mark.step2]
 
 @pytest.fixture(scope="module", autouse=True)
 def require_tesseract():
+    """Skip this whole file when Tesseract is not installed: these tests run the real program."""
     try:
         ocr.tesseract_version()
     except Exception:
@@ -17,6 +18,7 @@ def require_tesseract():
 
 
 def render(tmp_path, text, size=(700, 120), origin=(20, 30), font_size=36, mode="RGB", background="white"):
+    """Draw `text` on a blank image and save it. Returns the path and the font (to predict word positions)."""
     img = Image.new(mode, size, background)
     font = ImageFont.load_default(size=font_size)
     ImageDraw.Draw(img).text(origin, text, fill="black", font=font)
@@ -26,6 +28,7 @@ def render(tmp_path, text, size=(700, 120), origin=(20, 30), font_size=36, mode=
 
 
 def test_ocr_returns_text_and_word_boxes_in_working_image_pixels(tmp_path):
+    """OCR returns the text, and word boxes in the pixels of the original image even though it was enlarged."""
     prefix, number = "DL No: MH12 ", "20190001234"
     path, font = render(tmp_path, prefix + number)
 
@@ -42,6 +45,7 @@ def test_ocr_returns_text_and_word_boxes_in_working_image_pixels(tmp_path):
 
 
 def test_ocr_text_keeps_line_structure(tmp_path):
+    """Two printed lines come back as two text lines, never merged into one."""
     path, _ = render(tmp_path, "Name : JOHN DOE\nDOB : 12-08-1990", size=(600, 200))
     lines = ocr.run_ocr(path).text.splitlines()
     assert any("JOHN DOE" in line for line in lines)
@@ -50,6 +54,7 @@ def test_ocr_text_keeps_line_structure(tmp_path):
 
 
 def test_ocr_handles_transparent_png(tmp_path):
+    """A PNG with a transparent background is still readable."""
     # Transparent *black* background: naive grayscale would give black text on black.
     path, _ = render(tmp_path, "LICENCE 12345", mode="RGBA", background=(0, 0, 0, 0))
     assert "12345" in ocr.run_ocr(path).text
@@ -72,6 +77,7 @@ def ruled_table(tmp_path, rows):
 
 
 def test_ocr_reads_every_row_of_a_ruled_table(tmp_path):
+    """The reason table lines are erased: without it, Tesseract drops rows of a bordered table."""
     rows = [("Class of Vehicle", "DOI", "Valid Till"), ("MCWOG", "01-02-2010", "31-01-2030"),
             ("MCWG", "05-06-2015", "31-01-2030"), ("LMV", "10-11-2016", "31-01-2030"), ("LMV-TR", "12-03-2018", "11-03-2021")]
     text = ocr.run_ocr(ruled_table(tmp_path, rows)).text
@@ -80,6 +86,7 @@ def test_ocr_reads_every_row_of_a_ruled_table(tmp_path):
 
 
 def test_erase_rules_removes_lines_but_keeps_text():
+    """Both a horizontal and a vertical line disappear, and not one pixel of the text changes."""
     import numpy as np
 
     img = Image.new("L", (1000, 300), 255)
@@ -95,6 +102,7 @@ def test_erase_rules_removes_lines_but_keeps_text():
 
 
 def test_erase_rules_keeps_white_text_on_a_dark_banner(tmp_path):
+    """A solid title bar is not mistaken for a line: at least 98% of it survives and its text is still read."""
     import numpy as np
 
     img = Image.new("RGB", (900, 160), "white")
