@@ -378,3 +378,12 @@ def test_compare_models_prints_diff_table(tmp_path, monkeypatch, capsys):
     assert rows["model/a"].split("|")[1].strip() == "0"  # null core fields
     assert rows["model/b"].split("|")[1].strip() == "1"
     assert all(len(p.calls) == 1 for p in providers.values())  # same sample through both models
+
+
+def test_prompt_asks_for_per_class_validity_only_when_printed():
+    from app.services.providers.base import EXTRACTION_USER_PROMPT
+
+    assert "vehicle_class_validity" in EXTRACTION_USER_PROMPT
+    assert "one row per line" in EXTRACTION_USER_PROMPT  # source_text in OCR reading order
+    assert "issued 2019-06-16, valid till 2034-06-15" in EXTRACTION_USER_PROMPT  # dates labelled
+    assert "Omit it if no such table is printed" in EXTRACTION_USER_PROMPT

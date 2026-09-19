@@ -234,7 +234,7 @@ python scripts/compare_models.py     # runs every file in ./samples through LLM_
 - **A vision LLM on its own:** It understands any layout, but when it gets something wrong the result is *confidently wrong*: a plausible licence number that isn't on the card.
 
 **Hallucination versus recognition error.** The two engines fail differently:
-- **OCR** makes *recognition* errors, such as `LMV` read as `oe`. They are visible and local, and it never invents a field.
+- **OCR** makes *recognition* errors, such as `MCWG` read as `/MCWG`, or a table cell not read at all. They are visible and local, and it never invents a field.
 - **A vision LLM** reads badly printed text well, but can *hallucinate*: fill a gap, infer a value that isn't printed, or reformat what is.
 
 The design uses each to check the other:
@@ -306,7 +306,11 @@ To try another model, set `LLM_MODEL` in `.env`. Re-running `compare_models.py` 
 
 ## Known limitations
 
-- **Highlight matching is fuzzy.** Boxes come from matching `source_text` against Tesseract's words. Stylised fonts, text in tables or on busy backgrounds, and heavy OCR errors can prevent a match (on the Maharashtra sample, Tesseract reads `LMV` in the vehicle table as `oe`). The field then shows its source snippet without a highlight and says "not located on the image"; it never shows a wrong highlight.
+- **Highlight matching is fuzzy.** Boxes come from matching `source_text` against Tesseract's words. Stylised fonts, text on busy backgrounds and heavy OCR errors can prevent a match. The field then shows its source snippet without a highlight and says "not located on the image"; it never shows a wrong highlight.
+- **Tables are hard for OCR.** On the Maharashtra sample, the vehicle-class table has ruled cells over a watermark. Tesseract never reads the `LMV` cell (none of its page-segmentation modes does, even after binarising) and reads `MCWG` as `/MCWG`. The effects:
+  - `vehicle_classes` stays "Please verify".
+  - A column value such as `LMV\nMCWG` is never consecutive in OCR's row-by-row reading order. So when the whole value can't be matched, each part (line, or comma-separated item) is matched on its own, and the cells OCR could read are highlighted: here, only `MCWG`.
+- **Per-class validity is extracted into an extra field.** The schema has no core field for per-class dates, so when a card prints them, the extraction asks for `other_fields.vehicle_class_validity` (e.g. `LMV: issued 2019-06-16, valid till 2034-06-15; …`), with the table rows as `source_text`. Its confidence comes from fuzzy OCR agreement across the whole rows. Since the dates match, it can be `high` even though the short `LMV` cell itself wasn't read.
 - **Where images go (PII).** With the default setup, images and chat excerpts are sent through OpenRouter to the underlying model provider. This is mitigated by OpenRouter's zero-data-retention / no-training provider routing setting, which is enabled on the account. Through the provider abstraction (`ExtractionProvider` + `get_provider`), setting `LLM_MODEL=ollama/<model>` runs a fully local Ollama model instead, so no personal data leaves the machine (see *Fully local option*). OCR, embeddings and retrieval always run locally.
 - **PDFs: page 1 only.** Multi-page PDFs are accepted, but only the first page is read.
 - **No authentication or multiple users.** Anyone who can reach the server can see every upload. Run it locally or behind your own access control.

@@ -150,6 +150,28 @@ def match_bbox(target: str | None, words: list[dict]) -> Box | None:
     return Box(x=left, y=top, w=right - left, h=bottom - top)
 
 
+MIN_PART_CHARS = 3
+
+
+def match_bbox_parts(target: str | None, words: list[dict]) -> Box | None:
+    """Fallback for values whose parts are not consecutive in OCR reading order.
+
+    A table column such as "LMV\\nMCWG" is read row by row by Tesseract, so the whole value
+    never forms one window. Each part (split on lines, commas, semicolons) is matched on its
+    own and the boxes of the parts that were found are unioned. Parts shorter than
+    MIN_PART_CHARS are ignored: they would match almost anywhere.
+    """
+    parts = [p for p in re.split(r"[\n,;]+", target or "") if len(normalize(p)) >= MIN_PART_CHARS]
+    if len(parts) < 2:
+        return None
+    boxes = [box for box in (match_bbox(p, words) for p in parts) if box]
+    if not boxes:
+        return None
+    left, top = min(b.x for b in boxes), min(b.y for b in boxes)
+    right, bottom = max(b.x + b.w for b in boxes), max(b.y + b.h for b in boxes)
+    return Box(x=left, y=top, w=right - left, h=bottom - top)
+
+
 # --- user edits -----------------------------------------------------------------------------
 
 MAX_VALUE_CHARS = 1000
@@ -212,7 +234,8 @@ def merge(
 
         if field.value is None:
             continue
-        field.bbox = match_bbox(field.source_text or field.value, words or [])
+        anchor = field.source_text or field.value
+        field.bbox = match_bbox(anchor, words or []) or match_bbox_parts(anchor, words or [])
         if low_ocr:
             continue
         if text_matches_ocr(field.source_text or field.value, ocr_text, is_date=is_date):

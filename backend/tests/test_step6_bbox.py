@@ -98,3 +98,41 @@ def test_chat_sources_carry_boxes(client, extracted, monkeypatch):
     texts = [s for s in sources if s["origin"] == "ocr_text"]
     assert fields and all(s["bbox"] for s in fields)
     assert texts and any(s["bbox"] for s in texts)  # OCR chunks matched best-effort
+
+
+# Table columns: the value's parts are not consecutive in OCR reading order (rows are read
+# left to right), and Tesseract may miss some cells entirely - as on the Maharashtra sample.
+TABLE_LINES = ["Valid for Class of Vehicle | DOI | Valid Till", "oe 16-06-2019 | 15-06-2034", "/MCWG 16-06-2019 | 15-06-2034"]
+TABLE_WORDS = words_from_lines(TABLE_LINES, x0=20, y0=300, line_h=30, char_w=10, h=20)
+
+
+def test_table_column_highlights_the_cells_ocr_could_read():
+    from app.services.extraction import match_bbox, match_bbox_parts
+
+    assert match_bbox("LMV\nMCWG", TABLE_WORDS) is None  # never consecutive, LMV unread
+    assert match_bbox_parts("LMV\nMCWG", TABLE_WORDS) == box_of("/MCWG", words=TABLE_WORDS)
+    assert match_bbox_parts("LMV, MCWG", TABLE_WORDS) == box_of("/MCWG", words=TABLE_WORDS)
+
+
+def test_part_fallback_guards():
+    from app.services.extraction import match_bbox_parts
+
+    assert match_bbox_parts("MCWG", TABLE_WORDS) is None  # a single part is not a fallback case
+    assert match_bbox_parts("A+\nO+", TABLE_WORDS) is None  # parts under 3 chars are ignored
+    assert match_bbox_parts("XYZ\nQRS", TABLE_WORDS) is None  # nothing found
+    assert match_bbox_parts(None, TABLE_WORDS) is None
+
+
+def test_merge_uses_part_fallback_only_when_whole_value_fails():
+    from app.services.extraction import merge
+
+    data = make_licence(vehicle_classes=fv("LMV, MCWG", "LMV\nMCWG"))
+
+    # Whole-value matches are untouched by the fallback.
+    merged, _ = merge(data, CANNED_OCR_TEXT, words=CANNED_WORDS)
+    assert merged.full_name.bbox == box_of("JOHN", "DOE", words=CANNED_WORDS)
+
+    # Only the table is printed: the column value falls back to the cell OCR could read.
+    merged, _ = merge(data, "\n".join(TABLE_LINES), words=TABLE_WORDS)
+    assert merged.vehicle_classes.bbox == box_of("/MCWG", words=TABLE_WORDS)
+    assert merged.vehicle_classes.confidence == "review"  # LMV is still unconfirmed by OCR

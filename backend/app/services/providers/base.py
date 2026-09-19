@@ -43,6 +43,12 @@ EXTRACTION_USER_PROMPT = (
     "this shape:\n{\n"
     + "".join(f'  "{name}": {_FIELD},  // {_FIELD_NOTES[name]}\n' for name in CORE_FIELDS)
     + f'  "other_fields": {{ "<descriptive_snake_case_key>": {_FIELD}, ... }}\n}}'
+    # Per-class validity tables have no core field; without this hint models drop the dates.
+    + "\nIf the licence prints validity per vehicle class (for example a table of class, issue "
+    "date and valid-till date), also add other_fields.vehicle_class_validity: value like "
+    '"LMV: issued 2019-06-16, valid till 2034-06-15; MCWG: issued 2019-06-16, valid till '
+    '2034-06-15", and source_text the table rows exactly as printed, one row per line. '
+    "Omit it if no such table is printed."
 )
 JSON_RETRY_PROMPT = "Your previous response was not valid JSON. Return only the JSON object."
 
