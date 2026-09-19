@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { useToast } from './Toast.jsx'
 import ErrorMessage from './ErrorMessage.jsx'
-import { fieldDomId, listFields } from '../fields.js'
+import { CORE_FIELDS, OTHER_FIELD, composeOther, fieldDomId, otherItems, parseOther } from '../fields.js'
 
 // Progress text while POST /extract runs (a single request, so stages are time-based).
 const STAGES = [
@@ -54,6 +54,62 @@ function Field({ id, label, kind, field, active, onChange, onFocus }) {
   )
 }
 
+// One editable box for everything outside the eight core fields: one "Label: value" line per
+// item. Each item keeps its own source and highlight; the sources are listed underneath.
+function OtherField({ id, text, items, active, onChange, onFocus }) {
+  const review = items.some(({ field }) => field.confidence === 'review')
+  const lines = text ? text.split('\n').length : 0
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={id} className="text-sm font-medium text-slate-700">
+          {OTHER_FIELD.label}
+        </label>
+        {review && (
+          <span className="text-xs font-medium text-amber-700" id={`${id}-hint`}>
+            ⚠ Please verify
+          </span>
+        )}
+      </div>
+      <textarea
+        id={id}
+        value={text}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={onFocus}
+        onClick={onFocus}
+        rows={Math.max(3, lines + 1)}
+        placeholder="One item per line, e.g. Blood group: O+"
+        aria-describedby={`${review ? `${id}-hint ` : ''}${id}-source`}
+        className={`mt-1 block w-full rounded-md border px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 ${
+          active && items.some(({ field }) => field.bbox) ? 'ring-2 ring-blue-300 ' : ''
+        }${
+          review
+            ? 'border-amber-400 bg-amber-50/50 focus:border-amber-500 focus:ring-amber-200'
+            : 'border-slate-300 bg-white focus:border-blue-500 focus:ring-blue-200'
+        }`}
+      />
+      <div id={`${id}-source`} className="mt-1 text-xs text-slate-500">
+        {items.length === 0 ? (
+          <p>Source: <em>nothing else found on the document</em></p>
+        ) : (
+          <>
+            <p>Source:</p>
+            <ul className="mt-0.5 space-y-0.5">
+              {items.map(({ key, label, field }) => (
+                <li key={key} className="whitespace-pre-line">
+                  {field.confidence === 'review' && <span className="text-amber-700">⚠ </span>}
+                  {label}: {field.source_text ?? <em>not found on the document</em>}
+                  {field.source_text && !field.bbox && <span className="text-slate-400"> · not located on the image</span>}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ExtractionProgress({ stage }) {
   return (
     <ol className="space-y-3" aria-live="polite">
@@ -73,8 +129,8 @@ function ExtractionProgress({ stage }) {
   )
 }
 
-// onBoxesChange([{ key, label, box, confidence }]) reports highlightable fields to the viewer;
-// onFieldFocus(key) tells it which one to emphasise.
+// onBoxesChange([{ key, target, label, box, confidence }]) reports highlightable items to the
+// viewer (target = the form field they belong to); onFieldFocus(target) marks the active field.
 export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxesChange }) {
   const toast = useToast()
   const [status, setStatus] = useState('loading') // loading | extracting | ready | error
@@ -83,6 +139,7 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
   const [warnings, setWarnings] = useState([])
   const [form, setForm] = useState(null) // LicenceData being edited
   const [saved, setSaved] = useState(null) // last persisted LicenceData
+  const [otherText, setOtherText] = useState('') // the "Other relevant information" box
   const [saving, setSaving] = useState(false)
 
   const mounted = useRef(true)
@@ -98,6 +155,7 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     setWarnings(result.warnings)
     setForm(result.data)
     setSaved(result.data)
+    setOtherText(composeOther(result.data.other_fields))
     setStatus('ready')
   }, [])
 
@@ -140,31 +198,35 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     load()
   }, [load])
 
-  // Fields with a bbox (and a value) become clickable highlights on the document.
+  // Fields and other items with a bbox become clickable highlights on the document.
   useEffect(() => {
     if (!form) return
+    const core = CORE_FIELDS.map((f) => ({ key: f.name, target: f.name, label: f.label, field: form[f.name] }))
+    const other = otherItems(form.other_fields).map(({ key, label, field }) => ({
+      key: `other_fields.${key}`,
+      target: OTHER_FIELD.name,
+      label,
+      field,
+    }))
     onBoxesChange?.(
-      listFields(form)
+      [...core, ...other]
         .filter(({ field }) => field.bbox && field.value != null)
-        .map(({ key, label, field }) => ({ key, label, box: field.bbox, confidence: field.confidence })),
+        .map(({ key, target, label, field }) => ({ key, target, label, box: field.bbox, confidence: field.confidence })),
     )
   }, [form, onBoxesChange])
 
-  function update(key, value) {
-    setForm((f) => {
-      if (!key.startsWith('other_fields.')) return { ...f, [key]: { ...f[key], value } }
-      const k = key.slice('other_fields.'.length)
-      return { ...f, other_fields: { ...f.other_fields, [k]: { ...f.other_fields[k], value } } }
-    })
+  function update(name, value) {
+    setForm((f) => ({ ...f, [name]: { ...f[name], value } }))
   }
 
   async function save(e) {
     e.preventDefault()
     setSaving(true)
     try {
-      const data = await api.saveData(docId, form)
+      const data = await api.saveData(docId, { ...form, other_fields: parseOther(otherText, saved.other_fields) })
       setForm(data)
       setSaved(data)
+      setOtherText(composeOther(data.other_fields))
       toast('Changes saved.')
     } catch (err) {
       toast(`Could not save: ${err.message}`, 'error')
@@ -190,23 +252,11 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     )
   }
 
-  const dirty = JSON.stringify(form) !== JSON.stringify(saved)
-  const fields = listFields(form)
-  const core = fields.filter((f) => !f.key.startsWith('other_fields.'))
-  const other = fields.filter((f) => f.key.startsWith('other_fields.'))
-  const reviewCount = fields.filter(({ field }) => field.confidence === 'review').length
-  const renderField = (f) => (
-    <Field
-      key={f.key}
-      id={fieldDomId(f.key)}
-      label={f.label}
-      kind={f.kind}
-      field={f.field}
-      active={activeField === f.key}
-      onChange={(v) => update(f.key, v)}
-      onFocus={() => onFieldFocus?.(f.key)}
-    />
-  )
+  const dirty = JSON.stringify(form) !== JSON.stringify(saved) || otherText !== composeOther(saved.other_fields)
+  const items = otherItems(form.other_fields)
+  const reviewCount =
+    CORE_FIELDS.filter((f) => form[f.name].confidence === 'review').length +
+    (items.some(({ field }) => field.confidence === 'review') ? 1 : 0)
 
   return (
     <form onSubmit={save}>
@@ -224,16 +274,26 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
             : `${reviewCount} field${reviewCount === 1 ? '' : 's'} could not be confirmed against the document text. Please verify the highlighted fields.`}
         </p>
 
-        {core.map(renderField)}
-
-        {other.length > 0 && (
-          <>
-            <h3 className="border-t border-slate-200 pt-5 text-sm font-semibold uppercase tracking-wide text-slate-500">
-              Other details
-            </h3>
-            {other.map(renderField)}
-          </>
-        )}
+        {CORE_FIELDS.map((f) => (
+          <Field
+            key={f.name}
+            id={fieldDomId(f.name)}
+            label={f.label}
+            kind={f.kind}
+            field={form[f.name]}
+            active={activeField === f.name}
+            onChange={(v) => update(f.name, v)}
+            onFocus={() => onFieldFocus?.(f.name)}
+          />
+        ))}
+        <OtherField
+          id={fieldDomId(OTHER_FIELD.name)}
+          text={otherText}
+          items={items}
+          active={activeField === OTHER_FIELD.name}
+          onChange={setOtherText}
+          onFocus={() => onFieldFocus?.(OTHER_FIELD.name)}
+        />
       </div>
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 rounded-b-xl border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">

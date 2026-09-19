@@ -15,7 +15,7 @@ export default function DocumentWorkspace({ docId }) {
   const [info, setInfo] = useState(null) // { meta, label }
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('form')
-  const [fieldBoxes, setFieldBoxes] = useState([]) // [{ key, label, box, confidence }]
+  const [fieldBoxes, setFieldBoxes] = useState([]) // [{ key, target, label, box, confidence }]
   const [activeField, setActiveField] = useState(null)
   const [activeSource, setActiveSource] = useState(null) // { id, box }
 
@@ -58,8 +58,8 @@ export default function DocumentWorkspace({ docId }) {
           box: f.box,
           label: f.label,
           tone: f.confidence === 'review' ? 'review' : 'field',
-          active: f.key === activeField,
-          onClick: () => focusField(f.key),
+          active: f.target === activeField, // the form field this highlight belongs to
+          onClick: () => focusField(f.target),
         }))
       : activeSource?.box
         ? [{ id: activeSource.id, box: activeSource.box, label: 'Chat source', tone: 'source', active: true }]

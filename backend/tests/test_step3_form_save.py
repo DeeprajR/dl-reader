@@ -114,3 +114,23 @@ def test_backend_serves_built_frontend_without_shadowing_api(client):
     page = client.get("/")
     assert page.status_code == 200 and "<div id=\"root\">" in page.text
     assert client.get("/api/documents").headers["content-type"].startswith("application/json")
+
+
+def test_form_has_exactly_the_nine_required_fields():
+    import re
+
+    labels = re.findall(r"label: '([^']+)'", read("src/fields.js"))
+    assert labels == [
+        "Full Name",
+        "Driving Licence Number",
+        "Date of Birth",
+        "Date of Issue",
+        "Date of Expiry",
+        "Address",
+        "Vehicle/Class of Licence",
+        "Issuing Authority",
+        "Other relevant information",
+    ]
+    # Extra items are not rendered as their own inputs: they are lines of the ninth field.
+    form = read("src/components/ExtractedForm.jsx")
+    assert "<OtherField" in form and "Other details" not in form
