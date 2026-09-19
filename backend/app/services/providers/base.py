@@ -1,13 +1,19 @@
 """Extraction provider Protocol, factory, and the prompt/parsing shared by all providers."""
 
 import json
+import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.schemas import CORE_FIELDS, FieldValue, LicenceData
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MODEL = "google/gemini-3.8-flash"
+OLLAMA_PREFIX = "ollama/"
+MAX_ATTEMPTS = 2  # one retry on failure or invalid JSON
 
 EXTRACTION_SYSTEM_PROMPT = """
 You are a precise document data extraction system. You will receive an image of a driving licence.
@@ -104,6 +110,39 @@ def parse_licence_json(text: str | None) -> LicenceData:
     return LicenceData(**{name: _field(obj.get(name)) for name in CORE_FIELDS}, other_fields=other)
 
 
+async def extract_with_retry(
+    complete: Callable[[list[dict]], Awaitable[str]], messages: list[dict], model: str
+) -> LicenceData:
+    """Shared by every provider: call, parse, and retry once on a transient failure or invalid
+    JSON (appending the JSON_RETRY_PROMPT after the bad reply). Non-retryable errors raise."""
+    last_error: ProviderError | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            reply = await complete(messages)
+        except ProviderError as e:
+            if not e.retryable:
+                raise
+            logger.warning("Extraction attempt %d with %s failed: %s", attempt, model, e)
+            last_error = e
+            continue
+        try:
+            return parse_licence_json(reply)
+        except InvalidJSONError as e:
+            logger.warning("Attempt %d with %s returned invalid JSON: %s", attempt, model, e)
+            last_error = ProviderError(f"The model {model} did not return valid JSON.")
+            if reply.strip():  # an empty reply is simply retried as-is
+                messages = messages + [
+                    {"role": "assistant", "content": reply},
+                    {"role": "user", "content": JSON_RETRY_PROMPT},
+                ]
+    assert last_error is not None
+    raise last_error
+
+
+def is_local(model: str) -> bool:
+    return model.startswith(OLLAMA_PREFIX)
+
+
 def llm_model() -> str:
     """Extraction model: LLM_MODEL, else the default chosen by scripts/compare_models.py."""
     return (os.getenv("LLM_MODEL") or "").strip() or DEFAULT_MODEL
@@ -115,15 +154,18 @@ def chat_model() -> str:
 
 
 def get_provider(model: str | None = None) -> ExtractionProvider:
-    """The extraction provider for `model` (default: LLM_MODEL).
+    """The extraction provider for `model` (default: LLM_MODEL): "ollama/<name>" runs locally
+    through Ollama, anything else goes to OpenRouter.
 
     Routes only ever see the ExtractionProvider Protocol. Taking an explicit model lets
     scripts/compare_models.py run two models through identical code.
     """
     model = (model or "").strip() or llm_model()
-    if model.startswith("ollama/"):
-        raise ProviderError("Ollama models are not supported yet. Set LLM_MODEL to an OpenRouter model.")
     # Imported here: provider modules import this module for the shared prompt and parser.
+    if is_local(model):
+        from app.services.providers.ollama import OllamaProvider
+
+        return OllamaProvider(model.removeprefix(OLLAMA_PREFIX))
     from app.services.providers.openrouter import OpenRouterProvider
 
     return OpenRouterProvider(model)

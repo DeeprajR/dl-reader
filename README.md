@@ -116,7 +116,7 @@ cp backend/.env.example .env        # Windows: copy backend\.env.example .env
 ```
 
 ```ini
-OPENROUTER_API_KEY=sk-or-...          # required: the server refuses to start without it
+OPENROUTER_API_KEY=sk-or-...          # required (unless both models run on Ollama); the server refuses to start without it
 LLM_MODEL=google/gemini-3.8-flash     # extraction model (and chat, unless LLM_CHAT_MODEL is set)
 LLM_MODEL_ALT=anthropic/claude-sonnet-5   # used only by scripts/compare_models.py
 LLM_CHAT_MODEL=                       # optional separate chat model
@@ -153,7 +153,7 @@ Once dependencies are installed, day-to-day running is two commands: `uvicorn ap
 
 ```bash
 cd backend
-pytest                  # whole suite, ~7 s
+pytest                  # whole suite, ~10 s
 pytest -m phase1        # Phase 1 gate (steps 1-5)
 pytest -m step6         # a single build step (step1 ... step10)
 ```
@@ -174,6 +174,31 @@ docker build -t licence-reader . && docker run -p 7860:7860 --env-file .env lice
 
 Open <http://localhost:7860>. FastAPI serves both the API and the built frontend.
 
+### Fully local option: Ollama (no personal data leaves the machine)
+
+To keep licence images and chat excerpts on your own machine, run the model locally with [Ollama](https://ollama.com):
+
+```bash
+ollama pull qwen2.5vl            # any Ollama model with vision support
+```
+
+```ini
+LLM_MODEL=ollama/qwen2.5vl       # extraction runs locally
+LLM_CHAT_MODEL=                  # empty = chat uses the same local model
+```
+
+- **Same pipeline.** The `OllamaProvider` uses the same prompt, the same JSON parsing and the same one-retry rule as the OpenRouter provider.
+- **Chat stays local too.** Chat goes to Ollama whenever the chat model is an `ollama/...` model.
+- **No key needed.** When both models are local, `OPENROUTER_API_KEY` is not required.
+- **Where the server is.** The app uses Ollama's own `OLLAMA_HOST` setting (default `http://127.0.0.1:11434`, the local Ollama server). From inside Docker, point it at the host: `OLLAMA_HOST=http://host.docker.internal:11434`.
+- **Nothing leaves the machine.** With this setup, the image, OCR text and chat excerpts never leave the machine.
+
+**CPU latency.** On a CPU-only machine, a vision model typically needs **30–60 s per licence**, and longer the first time while the model loads. Hence a 180 s timeout for Ollama calls. A GPU brings this down to a few seconds.
+
+**Failure handling.** If Ollama isn't running, or the model hasn't been pulled:
+- Startup logs a warning.
+- Extraction returns a clear error such as *"Could not reach Ollama at … Start it (`ollama serve`) and pull the model (`ollama pull qwen2.5vl`), or set LLM_MODEL to an OpenRouter model."* The app never crashes.
+
 ### Model comparison script
 
 ```bash
@@ -191,7 +216,7 @@ python scripts/compare_models.py     # runs every file in ./samples through LLM_
 
 - **Pure OCR + rules or regex:** Licence layouts differ by state and country: labels move, values wrap, tables vary ("Valid Till", "DOI", "S/D/W of"). Rules tuned to one card break on the next, and OCR alone can't tell which number is the licence number.
 - **Cloud ID processors (AWS Textract AnalyzeID, Google Document AI identity parsers):** They are accurate on the ID types they support, but coverage outside those types (for example, Indian state licences) is limited. They also lock the design to one vendor, and still send the image to a third party.
-- **Self-hosted models only:** This gives zero data leaving the machine, but a capable vision model on CPU takes tens of seconds per document and reads less reliably. The provider abstraction keeps this option open instead of forcing it.
+- **Self-hosted models only:** This gives zero data leaving the machine, but a capable vision model on CPU takes tens of seconds per document and reads less reliably. It is available as an option (`LLM_MODEL=ollama/...`) rather than forced as the default.
 - **A vision LLM on its own:** It understands any layout, but when it gets something wrong the result is *confidently wrong*: a plausible licence number that isn't on the card.
 
 **Hallucination versus recognition error.** The two engines fail differently:
@@ -251,6 +276,7 @@ To try another model, set `LLM_MODEL` in `.env`. Re-running `compare_models.py` 
 | Confidence = OCR agreement (≥ 0.85 difflib, digits-only for dates) | Confidence reported by the LLM | Models' own confidence scores are poorly calibrated; agreement with OCR can be checked and explained |
 | Boxes from Tesseract word boxes, matched to `source_text` with a sliding window (word count ± 1, ratio ≥ 0.8) | Asking the vision model for coordinates | Model coordinates are unreliable. OCR boxes are exact pixels, and a miss simply means no highlight (the snippet still shows) |
 | OpenRouter through the `openai` SDK; model from env | A separate SDK per vendor | One integration, models swappable by env var, apples-to-apples comparison script |
+| `ExtractionProvider` Protocol + factory; `ollama/<model>` routes to a local `OllamaProvider` | Hard-wire one provider | Routes only see the Protocol; the fully local option is one env var away; prompt, parsing and retry are shared, not duplicated |
 | JSON-only prompt + parse + one retry | Strict `json_schema` response mode | Schema mode support varies by provider behind OpenRouter; the parser also accepts code fences, raw newlines and loose shapes |
 | 60 s timeout, one retry (timeouts/429/5xx/invalid JSON); auth/credit/model errors fail fast | SDK auto-retries | Retry behaviour is predictable and the user sees an error within a known time |
 | Small images upscaled to ~2000 px before OCR; EXIF rotation applied to the pixels; PDFs rendered with long side 2000 px | Raw image to Tesseract | Tesseract reads best with glyphs ~30 px tall; OCR boxes and the displayed image always match; huge PDF pages can't exhaust memory |
@@ -267,7 +293,7 @@ To try another model, set `LLM_MODEL` in `.env`. Re-running `compare_models.py` 
 ## Known limitations
 
 - **Highlight matching is fuzzy.** Boxes come from matching `source_text` against Tesseract's words. Stylised fonts, text in tables or on busy backgrounds, and heavy OCR errors can prevent a match (on the Maharashtra sample, Tesseract reads `LMV` in the vehicle table as `oe`). The field then shows its source snippet without a highlight and says "not located on the image"; it never shows a wrong highlight.
-- **Where images go (PII).** Images are sent through OpenRouter to the underlying model provider. This is mitigated by OpenRouter's zero-data-retention / no-training provider routing setting, which is enabled on the account. The provider abstraction (`ExtractionProvider` + `get_provider`) is where a fully local model can be plugged in to keep everything on the machine. OCR, embeddings and retrieval always run locally.
+- **Where images go (PII).** With the default setup, images and chat excerpts are sent through OpenRouter to the underlying model provider. This is mitigated by OpenRouter's zero-data-retention / no-training provider routing setting, which is enabled on the account. Through the provider abstraction (`ExtractionProvider` + `get_provider`), setting `LLM_MODEL=ollama/<model>` runs a fully local Ollama model instead, so no personal data leaves the machine (see *Fully local option*). OCR, embeddings and retrieval always run locally.
 - **PDFs: page 1 only.** Multi-page PDFs are accepted, but only the first page is read.
 - **No authentication or multiple users.** Anyone who can reach the server can see every upload. Run it locally or behind your own access control.
 - **Data is session-scoped by design.** Uploads, extractions and the vector index live in `./data` and `./chroma` in the running instance. A container without a volume loses them when it is removed. There is no long-term storage of personal documents.
@@ -295,7 +321,7 @@ backend/
   app/routes/chat.py             grounded chat endpoint
   app/services/ocr.py            Tesseract wrapper (text + word boxes)
   app/services/extraction.py     dates, confidence merge, bbox matching
-  app/services/providers/        ExtractionProvider Protocol + factory, OpenRouterProvider
+  app/services/providers/        ExtractionProvider Protocol + factory, OpenRouterProvider, OllamaProvider
   app/services/rag.py            chunk, embed, retrieve, answer
   app/services/storage.py        SQLite + file persistence
   app/schemas.py                 pydantic models

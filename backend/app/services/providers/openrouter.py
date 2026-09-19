@@ -2,7 +2,6 @@
 
 import base64
 import functools
-import logging
 import os
 
 import openai
@@ -12,17 +11,12 @@ from app.schemas import LicenceData
 from app.services.providers.base import (
     EXTRACTION_SYSTEM_PROMPT,
     EXTRACTION_USER_PROMPT,
-    JSON_RETRY_PROMPT,
-    InvalidJSONError,
     ProviderError,
-    parse_licence_json,
+    extract_with_retry,
 )
-
-logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LLM_TIMEOUT_S = 60.0
-MAX_ATTEMPTS = 2  # one retry on failure or invalid JSON
 
 
 @functools.lru_cache(maxsize=2)
@@ -78,26 +72,6 @@ class OpenRouterProvider:
                 ],
             },
         ]
-
-        last_error: ProviderError | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                reply = await complete(self.client, self.model, messages)
-            except ProviderError as e:
-                if not e.retryable:
-                    raise
-                logger.warning("Extraction attempt %d with %s failed: %s", attempt, self.model, e)
-                last_error = e
-                continue
-            try:
-                return parse_licence_json(reply)
-            except InvalidJSONError as e:
-                logger.warning("Attempt %d with %s returned invalid JSON: %s", attempt, self.model, e)
-                last_error = ProviderError(f"The model {self.model} did not return valid JSON.")
-                if reply.strip():  # an empty reply is simply retried as-is
-                    messages = messages + [
-                        {"role": "assistant", "content": reply},
-                        {"role": "user", "content": JSON_RETRY_PROMPT},
-                    ]
-        assert last_error is not None
-        raise last_error
+        return await extract_with_retry(
+            lambda msgs: complete(self.client, self.model, msgs), messages, self.model
+        )

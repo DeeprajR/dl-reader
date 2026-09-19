@@ -20,8 +20,11 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 from app.routes import chat, documents  # noqa: E402
+import httpx  # noqa: E402
+
 from app.services import ocr, rag, storage  # noqa: E402
-from app.services.providers.base import chat_model, llm_model  # noqa: E402
+from app.services.providers import ollama  # noqa: E402
+from app.services.providers.base import OLLAMA_PREFIX, chat_model, is_local, llm_model  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("licence_reader")
@@ -29,16 +32,35 @@ logger = logging.getLogger("licence_reader")
 FRONTEND_DIST = REPO_DIR / "frontend" / "dist"
 
 
+def check_ollama(models: set[str]) -> None:
+    """Warn (don't fail) if the local Ollama server or a configured model is missing."""
+    url = ollama.ollama_url()
+    try:
+        tags = httpx.get(f"{url}/api/tags", timeout=3).json()
+        installed = {m.get("name", "") for m in tags.get("models", [])}
+    except Exception:
+        logger.warning("Ollama is not reachable at %s. Start it with `ollama serve`, or set LLM_MODEL "
+                       "to an OpenRouter model.", url)
+        return
+    for model in models:
+        if not any(name == model or name.split(":")[0] == model for name in installed):
+            logger.warning("Ollama has no model '%s'. Run `ollama pull %s`.", model, model)
+
+
 def startup_checks() -> None:
     """Fail fast on missing required config; warn about optional system tools."""
-    if not os.getenv("OPENROUTER_API_KEY"):
+    models = (llm_model(), chat_model())
+    # The key is required unless extraction and chat both run on a local Ollama model.
+    if not all(is_local(m) for m in models) and not os.getenv("OPENROUTER_API_KEY"):
         message = (
             "OPENROUTER_API_KEY is not set. Copy backend/.env.example to .env in the repository "
             "root (or backend/.env) and add your OpenRouter API key."
         )
         logger.critical(message)
         raise RuntimeError(message)
-    logger.info("Extraction model: %s | chat model: %s", llm_model(), chat_model())
+    logger.info("Extraction model: %s | chat model: %s", *models)
+    if any(is_local(m) for m in models):
+        check_ollama({m.removeprefix(OLLAMA_PREFIX) for m in models if is_local(m)})
 
     try:
         logger.info("Tesseract %s found", ocr.tesseract_version())

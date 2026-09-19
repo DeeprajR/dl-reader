@@ -16,7 +16,8 @@ from chromadb.errors import NotFoundError
 from app.schemas import Box, ChatResponse, ChatSource, ExtractionResult, FieldValue
 from app.services import storage
 from app.services.extraction import iter_fields, match_bbox, normalize
-from app.services.providers.base import ProviderError, chat_model
+from app.services.providers import ollama
+from app.services.providers.base import OLLAMA_PREFIX, ProviderError, chat_model, is_local
 from app.services.providers.openrouter import complete, openrouter_client
 
 logger = logging.getLogger(__name__)
@@ -230,14 +231,26 @@ def is_refusal(answer: str) -> bool:
 
 
 async def _ask_llm(messages: list[dict]) -> str:
-    client, model = openrouter_client(), chat_model()
+    """LLM_CHAT_MODEL (else LLM_MODEL); "ollama/..." stays on this machine, like extraction."""
+    model = chat_model()
+    if is_local(model):
+        base_url, name = ollama.ollama_url(), model.removeprefix(OLLAMA_PREFIX)
+
+        def ask():
+            return ollama.complete(base_url, name, messages)
+    else:
+        client = openrouter_client()
+
+        def ask():
+            return complete(client, model, messages)
+
     try:
-        return await complete(client, model, messages)
+        return await ask()
     except ProviderError as e:
         if not e.retryable:
             raise
         logger.warning("Chat call to %s failed, retrying once: %s", model, e)
-        return await complete(client, model, messages)
+        return await ask()
 
 
 async def answer_question(question: str, chunks: list[dict]) -> ChatResponse:
