@@ -304,19 +304,34 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 
 ## Key technical decisions
 
-| Decision | Alternatives considered | Why |
-|---|---|---|
-| AI model checked by OCR | OCR with fixed rules; cloud ID services; AI model alone | Works on any layout, and a field is confirmed only when two independent readers agree |
-| OCR and the AI run at the same time | One after the other | Faster: you wait for the slower of the two, not both |
-| Highlights use OCR's word positions | Asking the AI where things are | The AI's positions are unreliable; OCR's are exact |
-| Table lines are erased before OCR | Other OCR settings | OCR skips rows in tables with ruled lines; erasing the lines fixed this on every test card |
-| Dates are checked for order | Trusting the AI to match each label to the right date | OCR can confirm a date is printed, but not which label it belongs to |
-| Any model through OpenRouter, chosen in `.env` | A separate integration for each AI vendor | Switch models without changing code; Ollama for a local model |
-| The first two PDF pages form one image | First page only | Two-sided licences are often scanned as two pages |
-| A fixed nine-field form | One box per detail found | The form stays the same for every licence; extra details go on their own lines |
-| SQLite and files on disk | A separate database server | Nothing extra to install or run |
-| One Docker container for everything | Separate frontend and backend hosting | One command to run, the same everywhere |
-| Tests use a fake AI model | Testing against the real model | Fast, free and repeatable, with no internet needed |
+### Technology stack
+
+- **Python and FastAPI for the backend.** The app has to wait on two slow things at once (OCR and the AI model), and FastAPI is built for that. It also validates every request and response, and serves the built frontend in the container, so one process runs the whole app. Flask would have needed extra pieces for each of these; Django is far more than a small API needs.
+- **Tesseract for OCR.** It runs on your computer for free, and it returns the position of every word, which is what the highlights are built from. Cloud OCR services (Google Vision, AWS Textract) are more accurate but cost money per page and send the licence to another company. EasyOCR and PaddleOCR need a GPU to be usably fast.
+- **poppler for PDFs.** Licences often arrive as scanned PDFs. poppler turns the pages into images so the rest of the app only ever handles images.
+- **A vision AI model through OpenRouter.** OpenRouter offers models from many vendors through one API, so the model is a setting (`LLM_MODEL`), not code. Using a vendor's own SDK would have tied the app to that vendor.
+- **Ollama as a local alternative.** Same setting, different value (`ollama/...`), and the documents never leave the computer. It's optional because local models are slower and less accurate.
+- **sentence-transformers and ChromaDB for the chat search.** The search model (`all-MiniLM-L6-v2`) is 90 MB and runs locally, so searching costs nothing and sends nothing anywhere. ChromaDB stores the results in a folder, with no server to run. Hosted alternatives (OpenAI embeddings, Pinecone) would add cost and another place the licence data goes.
+- **SQLite and plain files for storage.** A licence reader for one user needs no database server. Everything lives in two folders, which also makes the Docker image self-contained.
+- **React, Vite and Tailwind for the frontend.** The interface is a single page with three linked parts (document, form, chat) that update each other, which React handles well. Vite makes changes appear instantly while developing, and Tailwind keeps the styling in the components. Next.js was not needed: there is nothing to render on a server.
+- **One Docker image.** Node builds the frontend, then a slim Python image runs the backend with Tesseract, poppler and the search model already inside. One `docker run` starts everything, the same way on every machine.
+
+### AI model
+
+- **The AI model reads, OCR checks.** Fixed rules on top of OCR break when the layout changes. Cloud ID-reading services only support certain ID types. An AI model alone reads any layout but can make things up. Combining the two gives a field that is confirmed only when two independent readers agree. See [AI/LLM approach](#aillm-approach).
+- **`google/gemini-3.8-flash` as the default model.** Chosen by reading the sample licences with it and with `anthropic/claude-sonnet-5`: both got every main field right, Gemini made nothing up, and it costs about a third as much. See [Model choice](#model-choice).
+- **The model must copy its evidence.** For every value, it returns the exact printed text it used. That text is what gets checked against OCR, and what the highlights point to.
+- **Chat answers come only from the document.** Before the AI is asked, the app searches the document; if nothing relevant is found, it refuses. The AI is then given only the matching passages, and every answer lists them as sources.
+
+### Design
+
+- **OCR and the AI run at the same time**, so you wait for the slower one, not both.
+- **Highlights use OCR's word positions**, because the AI's positions are unreliable and OCR's are exact.
+- **Table lines are erased before OCR.** OCR skips rows in tables with ruled lines; erasing the lines fixed this on every test card.
+- **Dates are checked for order** (birth before issue, issue before expiry). OCR can confirm a date is printed, but not which label it belongs to.
+- **The first two PDF pages form one image**, because two-sided licences are often scanned as two pages.
+- **A fixed nine-field form**, so the form looks the same for every licence. Extra details go on their own lines in the last field.
+- **Tests use a fake AI model.** The tests check the app's own logic: what it does with a correct answer, a made-up value, a swapped date, a model error or a timeout. A fake model returns those cases on demand; the real one can't be made to, gives slightly different answers each run, and needs a key and internet. The real model is checked separately with `scripts/compare_models.py` and by using the app.
 
 ---
 
