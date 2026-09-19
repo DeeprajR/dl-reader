@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel
@@ -53,11 +54,13 @@ DATE_FIELDS: frozenset[str] = frozenset({"date_of_birth", "date_of_issue", "date
 
 class ChatRequest(BaseModel):
     question: str
+    today: date | None = None  # the browser's local date, for "days until expiry" answers
 
 
 class ChatSource(BaseModel):
     text: str
-    origin: Literal["ocr_text", "extracted_fields"]
+    # "calculated" = date arithmetic worked out by the app, not text from the document
+    origin: Literal["ocr_text", "extracted_fields", "calculated"]
     bbox: Box | None
 
 

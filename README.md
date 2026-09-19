@@ -60,7 +60,7 @@ flowchart TD
 1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name. For a PDF, the first two pages (front and back) are used.
 2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify.
 3. **Review.** Edit and save the form. Click a field to see it on the document, or click a highlight to jump to its field.
-4. **Chat.** Each answer is built only from passages found in the document, and lists them as sources.
+4. **Chat.** Each answer is built only from passages found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
 
 | API endpoint | What it does |
 |---|---|
@@ -322,6 +322,7 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 - **`google/gemini-3.8-flash` as the default model.** Chosen by reading the sample licences with it and with `anthropic/claude-sonnet-5`: both got every main field right, Gemini made nothing up, and it costs about a third as much. See [Model choice](#model-choice).
 - **The model must copy its evidence.** For every value, it returns the exact printed text it used. That text is what gets checked against OCR, and what the highlights point to.
 - **Chat answers come only from the document.** Before the AI is asked, the app searches the document; if nothing relevant is found, it refuses. The AI is then given only the matching passages, and every answer lists them as sources.
+- **Date arithmetic is done in code, not by the AI.** For questions like "how many days until it expires?", the app calculates days left, age and years held from the form's dates and today's date, and gives the result to the AI as a source marked *Calculated*. AI models make arithmetic slips; code doesn't. The answer still quotes the date printed on the card.
 
 ### Design
 

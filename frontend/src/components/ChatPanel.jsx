@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 
 const MAX_CHARS = 1000
-const ORIGIN_LABELS = { ocr_text: 'Document text', extracted_fields: 'Extracted field' }
+const ORIGIN_LABELS = { ocr_text: 'Document text', extracted_fields: 'Extracted field', calculated: 'Calculated' }
+const SUGGESTED_QUESTIONS = [
+  'When does the licence expire?',
+  'How many days until it expires?',
+  'Which vehicles can the holder drive?',
+  'Who issued this licence?',
+]
 
 // Models sometimes format answers as Markdown. Show them as tidy plain text (never as HTML):
 // `code` spans keep their quote as “…”, bold markers are dropped, list markers become bullets.
@@ -44,7 +50,11 @@ function Sources({ messageId, sources, activeSourceId, onSourceSelect }) {
                 <div className="border-t border-slate-100 px-3 py-2">
                   <p className="whitespace-pre-line text-slate-700">{s.text}</p>
                   <p className={`mt-1 ${s.bbox ? 'text-violet-700' : 'text-slate-400'}`}>
-                    {s.bbox ? 'Highlighted on the document.' : 'Not located on the image.'}
+                    {s.bbox
+                      ? 'Highlighted on the document.'
+                      : s.origin === 'calculated'
+                        ? 'Worked out from the licence dates and today’s date.'
+                        : 'Not located on the image.'}
                   </p>
                 </div>
               </details>
@@ -97,9 +107,10 @@ export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [messages, pending])
 
-  async function ask(e) {
+  // `suggested` is set when a suggested question is clicked; otherwise the typed question is sent.
+  async function ask(e, suggested) {
     e?.preventDefault()
-    const text = question.trim()
+    const text = (suggested ?? question).trim()
     if (!text || pending) return
     setMessages((m) => [...m, { role: 'user', text }])
     setQuestion('')
@@ -121,7 +132,19 @@ export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
         {messages.length === 0 && (
           <div className="text-sm text-slate-500">
             <p>Ask a question about this licence. Answers come only from the document and cite their sources.</p>
-            <p className="mt-2">For example: “What is the licence expiry date?”</p>
+            <p className="mt-3">Try one of these:</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {SUGGESTED_QUESTIONS.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => ask(null, q)}
+                  className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm text-blue-800 hover:bg-blue-100"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map((m, i) => (

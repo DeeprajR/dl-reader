@@ -210,3 +210,91 @@ def test_summary_chunk_is_indexed_only_when_classes_have_dates(client, extracted
     client.put(f"/api/documents/{extracted}/data", json=data)
     documents = rag._chroma().get_collection(f"doc_{extracted}").get()["documents"]
     assert "Vehicle class validity (all classes): MCWG: issued not printed, valid till 2035-06-04" in documents
+
+
+# --- date answers: arithmetic done by the app, not the LLM -------------------------------------
+
+
+def test_date_facts_are_calculated_from_the_form_dates():
+    from datetime import date
+
+    from conftest import fv, make_licence
+
+    data = make_licence(other_fields={"lmv_valid_till": fv("2034-06-15"), "lmv_tr_valid_till": fv("2021-03-11")})
+    facts = rag.date_facts(data, date(2026, 9, 20))
+    assert facts.startswith("Calculated on 2026-09-20 (today) from the licence dates: ")
+    # each fact keeps the text printed on the card, so the answer can still quote it
+    assert "The licence expires on 2034-06-15 (printed: '15-06-2034'), 2825 days from today (still valid today)." in facts
+    assert "The holder was born on 1990-08-12 (printed: '12-08-1990') and is 36 years old today." in facts
+    assert "The licence was issued on 2019-06-16 (printed: '16-06-2019'), 2653 days ago (7 full years)." in facts
+    assert "Vehicle class LMV expires on 2034-06-15 (printed: '2034-06-15'), 2825 days from today" in facts
+    assert "Vehicle class LMV TR expired on 2021-03-11 (printed: '2021-03-11'), 2019 days ago (no longer valid today)." in facts
+
+    assert "The licence expires today, 2034-06-15 (printed: '15-06-2034')." in rag.date_facts(data, date(2034, 6, 15))
+    assert "expired on 2034-06-15 (printed: '15-06-2034'), 1 day ago" in rag.date_facts(data, date(2034, 6, 16))
+    # the birthday has not come round yet this year
+    assert "is 35 years old today" in rag.date_facts(data, date(2026, 8, 11))
+
+    no_dates = make_licence(date_of_birth=fv(None), date_of_issue=fv(None), date_of_expiry=fv(None))
+    assert rag.date_facts(no_dates, date(2026, 9, 20)) is None
+
+
+def test_days_until_expiry_is_answered_from_the_calculated_excerpt(client, extracted, monkeypatch):
+    received = llm_replies(monkeypatch, 'The licence expires in 2825 days ("15-06-2034").')
+    response = client.post(
+        f"/api/documents/{extracted}/chat",
+        json={"question": "From today, how many days are left until the licence expires?", "today": "2026-09-20"},
+    )
+    assert response.status_code == 200
+    user = received[0][1]["content"]
+    assert "(calculated) Calculated on 2026-09-20 (today)" in user
+    assert "2825 days from today" in user
+    calculated = [s for s in response.json()["sources"] if s["origin"] == "calculated"]
+    assert len(calculated) == 1
+    # expanding the source highlights the printed expiry date
+    expiry = client.get(f"/api/documents/{extracted}/extract").json()["data"]["date_of_expiry"]
+    assert calculated[0]["bbox"] == expiry["bbox"]
+
+    # rules 1-3 are the spec's, word for word; rule 4 only adds the calculated excerpt
+    assert "3. Never speculate, estimate, or fill gaps.\n4. An excerpt marked (calculated)" in rag.CHAT_SYSTEM_PROMPT
+
+
+def test_other_questions_do_not_get_the_calculated_excerpt(client, extracted, monkeypatch):
+    received = llm_replies(monkeypatch, 'The licence number is MH12 20190001234 ("DL No: MH12 20190001234").')
+    response = ask(client, extracted, "What is the licence number?")
+    assert "(calculated)" not in received[0][1]["content"]
+    assert all(s["origin"] != "calculated" for s in response.json()["sources"])
+
+
+def test_calculated_excerpt_passes_the_same_relevance_gate(client, extracted, monkeypatch):
+    far = {"text": "Calculated on ...", "origin": "calculated", "bbox": None, "distance": 0.97}
+    monkeypatch.setattr(rag, "retrieve", lambda doc_id, question, k=5: [])
+    monkeypatch.setattr(rag, "calculated_chunk", lambda data, question, today: far)
+    response = ask(client, extracted, "How many days until the next football world cup?")
+    assert response.json() == {"answer": REFUSAL, "sources": []}  # refused before any LLM call
+
+
+def test_browser_date_is_used_only_when_plausible():
+    from datetime import date, timedelta
+
+    from app.routes import chat
+
+    today = date.today()
+    assert chat.local_today(None) == today
+    assert chat.local_today(today + timedelta(days=1)) == today + timedelta(days=1)  # ahead of a UTC server
+    assert chat.local_today(today - timedelta(days=1)) == today - timedelta(days=1)
+    assert chat.local_today(today + timedelta(days=400)) == today  # a wrong clock is ignored
+
+
+def test_retrieval_waits_for_a_rebuild_in_progress(client, extracted):
+    """Mid-rebuild the collection is briefly empty; a question asked then must not be refused."""
+    import threading
+
+    found = []
+    with rag._doc_lock(extracted):  # what index_document holds while it replaces the collection
+        worker = threading.Thread(target=lambda: found.extend(rag.retrieve(extracted, "What is the licence number?")))
+        worker.start()
+        worker.join(timeout=0.5)
+        assert worker.is_alive() and not found  # still waiting
+    worker.join(timeout=10)
+    assert found and "MH12 20190001234" in found[0]["text"]

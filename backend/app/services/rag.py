@@ -6,7 +6,9 @@ excerpts and scales unchanged to multi-page documents.
 
 import json
 import logging
+import re
 import threading
+from datetime import date
 from pathlib import Path
 
 import chromadb
@@ -15,7 +17,7 @@ from chromadb.errors import NotFoundError
 
 from app.schemas import Box, ChatResponse, ChatSource, ExtractionResult, FieldValue
 from app.services import storage
-from app.services.extraction import class_date_key, iter_fields, match_bbox, normalize
+from app.services.extraction import as_date, class_date_key, iter_fields, match_bbox, normalize
 from app.services.providers import ollama
 from app.services.providers.base import OLLAMA_PREFIX, ProviderError, chat_model, is_local
 from app.services.providers.openrouter import complete, openrouter_client
@@ -36,6 +38,7 @@ Rules:
 1. If the answer is present, answer concisely and quote the exact supporting text.
 2. If the answer is NOT in the excerpts, reply exactly: "The document does not contain this information." Do not use outside knowledge about licence formats.
 3. Never speculate, estimate, or fill gaps.
+4. An excerpt marked (calculated) holds date arithmetic the application worked out from the document's dates and today's date. For questions about days left, validity today, age or years held, use its numbers exactly as given, never calculate yourself, and also quote the printed date it is based on.
 """.strip()
 
 _chroma_path = Path("chroma")
@@ -151,6 +154,78 @@ def class_validity_chunk(data) -> str | None:
     return "Vehicle class validity (all classes): " + "; ".join(parts)
 
 
+def _days(n: int) -> str:
+    return "1 day" if n == 1 else f"{n} days"
+
+
+def _years_between(start: date, end: date) -> int:
+    """Whole years from `start` to `end` (an age, or how long a licence has been held)."""
+    return end.year - start.year - ((end.month, end.day) < (start.month, start.day))
+
+
+def _printed(field: FieldValue) -> str:
+    """The text printed on the card for this date, so a calculated answer can still quote it."""
+    source = " ".join((field.source_text or "").split())
+    return f" (printed: '{source}')" if source else ""
+
+
+def _validity(label: str, field: FieldValue, until: date, today: date) -> str:
+    left = (until - today).days
+    if left < 0:
+        return f"{label} expired on {until}{_printed(field)}, {_days(-left)} ago (no longer valid today)."
+    if left == 0:
+        return f"{label} expires today, {until}{_printed(field)}."
+    return f"{label} expires on {until}{_printed(field)}, {_days(left)} from today (still valid today)."
+
+
+def date_facts(data, today: date) -> str | None:
+    """Date arithmetic for the chat, done here so the LLM never has to calculate.
+
+    Days until expiry (licence and each vehicle class), age and years held, worked out from the
+    form's dates. It depends on today's date, so it is built per question and never indexed.
+    """
+    facts = []
+    if expiry := as_date(data.date_of_expiry):
+        facts.append(_validity("The licence", data.date_of_expiry, expiry, today))
+    if (birth := as_date(data.date_of_birth)) and birth <= today:
+        age = _years_between(birth, today)
+        facts.append(f"The holder was born on {birth}{_printed(data.date_of_birth)} and is {age} years old today.")
+    if (issue := as_date(data.date_of_issue)) and issue <= today:
+        held = (today - issue).days
+        facts.append(
+            f"The licence was issued on {issue}{_printed(data.date_of_issue)}, {_days(held)} ago "
+            f"({_years_between(issue, today)} full years)."
+        )
+    for key, field in data.other_fields.items():
+        if (m := class_date_key(key)) and m["kind"] == "valid_till" and (till := as_date(field)):
+            facts.append(_validity(f"Vehicle class {m['cls'].upper().replace('_', ' ')}", field, till, today))
+    if not facts:
+        return None
+    return f"Calculated on {today} (today) from the licence dates: " + " ".join(facts)
+
+
+# Questions about time: the only ones that get the calculated excerpt, so it is not listed as a
+# source for "what is the licence number?".
+_TIME_QUESTION = re.compile(
+    r"\b(today|now|currently|days?|weeks?|months?|years?|old|age|aged|valid|validity|invalid|expir\w*"
+    r"|lapsed?|left|remain\w*|until|till|still|long|renew\w*|overdue)\b",
+    re.IGNORECASE,
+)
+
+
+def calculated_chunk(data, question: str, today: date) -> dict | None:
+    """`date_facts` as a retrieved chunk, so it passes the same relevance gate as the others."""
+    text = date_facts(data, today) if _TIME_QUESTION.search(question) else None
+    if text is None:
+        return None
+    q, t = _embed([question, text])
+    dot = sum(a * b for a, b in zip(q, t))
+    norms = (sum(a * a for a in q) * sum(b * b for b in t)) ** 0.5
+    distance = 1.0 - dot / norms if norms else 1.0  # cosine distance, as ChromaDB reports it
+    # Expanding this source highlights the printed expiry date it is based on.
+    return {"text": text, "origin": "calculated", "bbox": data.date_of_expiry.bbox, "distance": distance}
+
+
 # --- indexing -------------------------------------------------------------------------------
 
 
@@ -220,16 +295,18 @@ def ensure_indexed(doc_id: str, result: ExtractionResult) -> None:
 
 def retrieve(doc_id: str, question: str, k: int = TOP_K) -> list[dict]:
     """Top-k chunks as {text, origin, bbox, distance}, nearest first."""
-    try:
-        collection = _chroma().get_collection(_collection_name(doc_id))
-    except NotFoundError:
-        return []
-    n = min(k, collection.count())
-    if n == 0:
-        return []
-    res = collection.query(
-        query_embeddings=_embed([question]), n_results=n, include=["documents", "metadatas", "distances"]
-    )
+    query = _embed([question])
+    # Wait for a rebuild in progress: mid-rebuild the collection is briefly missing or empty,
+    # and a question asked right after extraction would be refused.
+    with _doc_lock(doc_id):
+        try:
+            collection = _chroma().get_collection(_collection_name(doc_id))
+        except NotFoundError:
+            return []
+        n = min(k, collection.count())
+        if n == 0:
+            return []
+        res = collection.query(query_embeddings=query, n_results=n, include=["documents", "metadatas", "distances"])
     return [
         {
             "text": text,

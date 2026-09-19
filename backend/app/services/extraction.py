@@ -289,7 +289,7 @@ def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
     return _box_of(label_words + dates), any(find_date(w["text"]) == field.value for w in dates)
 
 
-def _as_date(field: FieldValue | None) -> date | None:
+def as_date(field: FieldValue | None) -> date | None:
     try:
         return date.fromisoformat(field.value) if field and field.value else None
     except ValueError:
@@ -308,7 +308,7 @@ def check_date_order(data: LicenceData) -> list[str]:
             field.confidence = "review"
 
     dob, doi, doe = data.date_of_birth, data.date_of_issue, data.date_of_expiry
-    birth, issue, expiry = _as_date(dob), _as_date(doi), _as_date(doe)
+    birth, issue, expiry = as_date(dob), as_date(doi), as_date(doe)
     if birth and birth > today:
         flag(f"Date of birth ({birth}) is in the future.", dob)
     if issue and issue > today:
@@ -325,7 +325,7 @@ def check_date_order(data: LicenceData) -> list[str]:
     for cls, pair in per_class.items():
         label = cls.upper().replace("_", " ")
         cls_issue, cls_till = pair.get("date_of_issue"), pair.get("valid_till")
-        start, end = _as_date(cls_issue), _as_date(cls_till)
+        start, end = as_date(cls_issue), as_date(cls_till)
         if start and start > today:
             flag(f"{label} date of issue ({start}) is in the future.", cls_issue)
         if start and end and start >= end:
