@@ -73,7 +73,8 @@ def print_table(label_a: str, label_b: str, a: dict, b: dict) -> None:
 
 
 async def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):  # Windows consoles default to a legacy code page
+        sys.stdout.reconfigure(encoding="utf-8")
     model_a = os.getenv("LLM_MODEL") or DEFAULT_MODEL
     model_b = os.getenv("LLM_MODEL_ALT") or DEFAULT_ALT_MODEL
     samples = sorted(p for p in SAMPLES_DIR.glob("*") if p.suffix.lower() in _EXTENSIONS)
