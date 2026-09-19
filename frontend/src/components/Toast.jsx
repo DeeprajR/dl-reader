@@ -1,0 +1,52 @@
+import { createContext, useCallback, useContext, useRef, useState } from 'react'
+
+const ToastContext = createContext(() => {})
+
+export function useToast() {
+  return useContext(ToastContext)
+}
+
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([])
+  const nextId = useRef(1)
+
+  const dismiss = useCallback((id) => setToasts((all) => all.filter((t) => t.id !== id)), [])
+
+  // show(message, 'success' | 'error')
+  const show = useCallback(
+    (message, kind = 'success') => {
+      const id = nextId.current++
+      setToasts((all) => [...all, { id, message, kind }])
+      setTimeout(() => dismiss(id), kind === 'error' ? 6000 : 3500)
+    },
+    [dismiss],
+  )
+
+  return (
+    <ToastContext.Provider value={show}>
+      {children}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            role={t.kind === 'error' ? 'alert' : 'status'}
+            className={`flex items-start gap-3 rounded-lg px-4 py-3 text-sm shadow-lg ring-1 ${
+              t.kind === 'error'
+                ? 'bg-red-50 text-red-900 ring-red-200'
+                : 'bg-emerald-50 text-emerald-900 ring-emerald-200'
+            }`}
+          >
+            <span className="flex-1">{t.message}</span>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="text-current opacity-60 hover:opacity-100"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  )
+}

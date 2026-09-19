@@ -114,6 +114,31 @@ def text_matches_ocr(target: str | None, ocr_text: str, *, is_date: bool = False
     return score >= TEXT_MATCH_RATIO
 
 
+# --- user edits -----------------------------------------------------------------------------
+
+MAX_VALUE_CHARS = 1000
+_OTHER_KEY = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def clean_user_data(data: LicenceData) -> LicenceData:
+    """Validate and tidy user-edited data. Raises ValueError with a user-facing message."""
+    data = data.model_copy(deep=True)
+    for key in data.other_fields:
+        if not _OTHER_KEY.fullmatch(key):
+            raise ValueError(f"Invalid field name '{key}'")
+    for name, field in iter_fields(data):
+        value = (field.value or "").strip() or None
+        if value and len(value) > MAX_VALUE_CHARS:
+            raise ValueError(f"{name} is longer than {MAX_VALUE_CHARS} characters")
+        if value and name in DATE_FIELDS:
+            iso = normalize_date(value)
+            if iso is None:
+                raise ValueError(f"{name} must be a valid date in YYYY-MM-DD format")
+            value = iso
+        field.value = value
+    return data
+
+
 # --- merge ----------------------------------------------------------------------------------
 
 

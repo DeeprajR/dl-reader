@@ -12,7 +12,7 @@ from pdf2image import convert_from_bytes
 from pdf2image.exceptions import PDFInfoNotInstalledError
 from PIL import Image, ImageOps
 
-from app.schemas import DocumentSummary, ExtractionResult, ImageMeta, UploadResponse
+from app.schemas import DocumentSummary, ExtractionResult, ImageMeta, LicenceData, UploadResponse
 from app.services import extraction, ocr, storage
 from app.services.providers import base as providers
 from app.services.providers.base import ProviderError
@@ -214,10 +214,25 @@ async def extract_document(doc_id: str):
     return result
 
 
-@router.get("/{doc_id}/extract", response_model=ExtractionResult)
-def get_extraction(doc_id: str):
+def _load_extraction(doc_id: str) -> ExtractionResult:
     get_document_or_404(doc_id)
     raw = storage.get_extraction(doc_id)
     if raw is None:
         raise HTTPException(404, "This document has not been extracted yet.")
     return ExtractionResult.model_validate_json(raw)
+
+
+@router.get("/{doc_id}/extract", response_model=ExtractionResult)
+def get_extraction(doc_id: str):
+    return _load_extraction(doc_id)
+
+
+@router.put("/{doc_id}/data", response_model=LicenceData)
+def save_data(doc_id: str, data: LicenceData):
+    result = _load_extraction(doc_id)
+    try:
+        result.data = extraction.clean_user_data(data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    storage.save_extraction(doc_id, result.model_dump_json())
+    return result.data
