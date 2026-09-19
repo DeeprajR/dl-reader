@@ -136,7 +136,7 @@ Open `.env` in a text editor (`notepad .env` on Windows, `open -e .env` on macOS
 
    On Windows and macOS, open Docker Desktop and wait until it shows Docker is running.
 
-2. **Build and start the app:**
+2. **Build and start the app.** Run these in the main `dl-reader` folder, where the `Dockerfile` and `.env` are (not in `backend`):
 
    ```bash
    docker build -t licence-reader .
