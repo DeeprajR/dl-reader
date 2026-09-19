@@ -207,3 +207,53 @@ def test_garbled_class_code_gets_no_box_instead_of_a_similar_row():
     assert fields["mcwg_valid_till"].bbox is None
     assert fields["mcwg_valid_till"].confidence == "review"
     assert fields["mcwog_valid_till"].confidence == "high"
+
+
+def test_fields_on_the_back_page_report_page_2():
+    from app.services.extraction import merge, page_of
+
+    assert page_of(None, [0, 500]) == 1
+    assert page_of(Box(x=0, y=499, w=5, h=5), [0, 500]) == 1
+    assert page_of(Box(x=0, y=500, w=5, h=5), [0, 500]) == 2
+
+    back = words_from_lines(["Issuing Authority : RTO, Pune"], y0=600)  # below the page break
+    front = [w for w in CANNED_WORDS if "RTO," not in w["text"] and w["text"] != "Pune"]
+    merged, _ = merge(make_licence(), CANNED_OCR_TEXT, words=front + back, page_offsets=[0, 500])
+    assert merged.full_name.page == 1
+    assert merged.issuing_authority.page == 2
+
+
+def test_rows_are_found_by_position_even_when_ocr_splits_the_cells():
+    from app.services.extraction import merge
+
+    rows = {"mcwg": "MCWG 05-06-2015 04-06-2035", "lmv": "LMV 10-11-2016 09-11-2036"}
+    words = words_from_lines(["Class DOI Valid Till", *rows.values()], x0=20, y0=100, line_h=30, char_w=10, h=20)
+    for i, w in enumerate(words):
+        w["line"] = 100 + i  # every cell its own Tesseract line, as after erasing the rulings
+    other = {f"{c}_valid_till": fv(r.split()[-1], r) for c, r in rows.items()}
+    merged, _ = merge(make_licence(other_fields=other), "\n".join(rows.values()), words=words)
+    assert merged.other_fields["mcwg_valid_till"].bbox == row_box(1, words_from_lines(["Class DOI Valid Till", *rows.values()], x0=20, y0=100, line_h=30, char_w=10, h=20))
+    assert merged.other_fields["lmv_valid_till"].confidence == "high"
+
+
+def test_side_by_side_cards_do_not_mix_rows():
+    from app.services.extraction import merge
+
+    front = words_from_lines(["DOB : 03-09-1992"], x0=20, y0=250)
+    back = words_from_lines(["MCWG 18-01-2017 17-01-2037"], x0=900, y0=246)  # same height, other card
+    other = {"mcwg_date_of_issue": fv("2017-01-18", "MCWG 18-01-2017 17-01-2037")}
+    merged, _ = merge(make_licence(other_fields=other), "DOB : 03-09-1992 MCWG 18-01-2017 17-01-2037", words=front + back)
+    field = merged.other_fields["mcwg_date_of_issue"]
+    assert field.confidence == "high"
+    assert field.bbox.x >= 900  # label and dates on the back card only
+
+
+def test_multi_part_values_are_confirmed_part_by_part():
+    from app.services.extraction import parts_match_ocr
+
+    table = "Class of Vehicle DOI Valid Till\nLMV 16-06-2019 15-06-2034\nMCWG 16-06-2019 15-06-2034"
+    assert parts_match_ocr("LMV\nMCWG", table)
+    assert parts_match_ocr("LMV, MCWG", table)
+    assert not parts_match_ocr("LMV, HGMV", table)  # a class that is not printed
+    assert not parts_match_ocr("A, B", "A B C")  # too short to check safely
+    assert not parts_match_ocr("LMV", table)  # single part: the normal check applies

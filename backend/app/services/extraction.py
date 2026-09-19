@@ -9,6 +9,7 @@ from app.schemas import CORE_FIELDS, DATE_FIELDS, Box, FieldValue, LicenceData
 
 TEXT_MATCH_RATIO = 0.85
 BBOX_MATCH_RATIO = 0.8
+MIN_PART_CHARS = 3  # shortest part of a multi-part value that is matched on its own
 MIN_OCR_CHARS = 20
 LOW_OCR_WARNING = "OCR yielded little text; confidence flags unreliable"
 
@@ -140,6 +141,19 @@ def text_matches_ocr(target: str | None, ocr_text: str, *, is_date: bool = False
     return score >= TEXT_MATCH_RATIO
 
 
+def parts_match_ocr(target: str | None, ocr_text: str) -> bool:
+    """True if every part of a multi-part value is printed as whole words in the OCR text.
+
+    A table column such as "LMV\nMCWG" is never contiguous in OCR reading order. Parts
+    shorter than MIN_PART_CHARS cannot be checked safely, so their presence means False.
+    """
+    parts = [normalize(p) for p in re.split(r"[\n,;]+", target or "") if normalize(p)]
+    if len(parts) < 2 or any(len(p) < MIN_PART_CHARS for p in parts):
+        return False
+    padded = f" {normalize(ocr_text)} "
+    return all(f" {part} " in padded for part in parts)
+
+
 def match_bbox(target: str | None, words: list[dict]) -> Box | None:
     """Locate `target` in the Tesseract word list; the union box of the best window, or None.
 
@@ -168,9 +182,6 @@ def match_bbox(target: str | None, words: list[dict]) -> Box | None:
     right = max(w["left"] + w["width"] for w in window)
     bottom = max(w["top"] + w["height"] for w in window)
     return Box(x=left, y=top, w=right - left, h=bottom - top)
-
-
-MIN_PART_CHARS = 3
 
 
 def match_bbox_parts(target: str | None, words: list[dict]) -> Box | None:
@@ -219,34 +230,63 @@ def _box_of(words: list[dict]) -> Box:
     return Box(x=left, y=top, w=right - left, h=bottom - top)
 
 
+def _visual_rows(words: list[dict]) -> list[list[dict]]:
+    """Words grouped by vertical position into rows, each sorted left to right.
+
+    Tesseract's own line ids cannot be trusted for tables: once rulings are erased it may
+    split one table row into separate column blocks.
+    """
+    if not words:
+        return []
+    heights = sorted(w["height"] for w in words)
+    tolerance = 0.6 * heights[len(heights) // 2]
+    rows: list[list[dict]] = []
+    centre = None
+    for w in sorted(words, key=lambda w: w["top"] + w["height"] / 2):
+        mid = w["top"] + w["height"] / 2
+        if rows and abs(mid - centre) <= tolerance:
+            rows[-1].append(w)
+            centre += (mid - centre) / len(rows[-1])
+        else:
+            rows.append([w])
+            centre = mid
+    return [sorted(row, key=lambda w: w["left"]) for row in rows]
+
+
 def _class_row(field: FieldValue, words: list[dict]) -> tuple[Box | None, bool]:
     """Locate a per-class date by the full class label of its row source_text ("LMV TR").
 
-    A table row is an OCR line containing a date; its class cell is the words just before the
-    first date. The label must match that cell exactly, on exactly one row: fuzzy or
-    first-word matching confuses classes such as LMV / LMV NT / LMV TR or MCWG / MCWOG, and
-    the same dates often repeat on every row. No match or several give no box rather than a
-    wrong one. Returns the row box and whether the value's date is printed on that row.
+    In each visual row, a class cell is the run of non-date words just before a date; the
+    label must match such a cell exactly (as its trailing words), and the class's dates are
+    the date words that follow. Fuzzy or first-word matching confuses classes such as LMV /
+    LMV NT / LMV TR or MCWG / MCWOG, and the same dates often repeat on every row, so a label
+    found on no row or several gives no box rather than a wrong one. Returns the box of the
+    label and its dates, and whether the value's date is among them.
     """
     label = _class_label(field.source_text)
     if not label:
         return None, False
-    lines: dict = {}
-    for w in words:
-        lines.setdefault(w.get("line"), []).append(w)
-
-    rows = []
-    for line in lines.values():
-        first_date = next((i for i, w in enumerate(line) if find_date(w["text"])), None)
-        if first_date is None:
-            continue
-        cell = [(token, i) for i, w in enumerate(line[:first_date]) for token in normalize(w["text"]).split()]
-        if len(cell) >= len(label) and [t for t, _ in cell[-len(label):]] == label:
-            rows.append([w for w in line[cell[-len(label)][1]:] if normalize(w["text"])])
-    if len(rows) != 1:
+    matches = []
+    for row in _visual_rows(words):
+        cell: list[tuple[str, dict]] = []
+        for i, w in enumerate(row):
+            if not find_date(w["text"]):
+                cell += [(token, w) for token in normalize(w["text"]).split()]
+                continue
+            if len(cell) >= len(label) and [t for t, _ in cell[-len(label):]] == label:
+                dates = []
+                for nxt in row[i:]:
+                    if find_date(nxt["text"]):
+                        dates.append(nxt)
+                    elif normalize(nxt["text"]):
+                        break  # the next class cell (or other text) begins
+                label_words = list(dict.fromkeys(id(w) for _, w in cell[-len(label):]))
+                matches.append(([w for w in row if id(w) in label_words], dates))
+            cell = []
+    if len(matches) != 1:
         return None, False
-    row = rows[0]
-    return _box_of(row), any(find_date(w["text"]) == field.value for w in row)
+    label_words, dates = matches[0]
+    return _box_of(label_words + dates), any(find_date(w["text"]) == field.value for w in dates)
 
 
 def _as_date(field: FieldValue | None) -> date | None:
@@ -333,8 +373,15 @@ def iter_fields(data: LicenceData) -> list[tuple[str, FieldValue]]:
     return core + [(f"other_fields.{k}", v) for k, v in data.other_fields.items()]
 
 
+def page_of(box: Box | None, page_offsets: list[int]) -> int:
+    """1-based source page of a box in a working image made of stacked pages."""
+    if box is None:
+        return 1
+    return 1 + sum(1 for top in page_offsets[1:] if box.y >= top)
+
+
 def merge(
-    data: LicenceData, ocr_text: str, words: list[dict] | None = None, page: int = 1
+    data: LicenceData, ocr_text: str, words: list[dict] | None = None, page_offsets: list[int] | None = None
 ) -> tuple[LicenceData, list[str]]:
     """Cross-check every field against OCR: confidence from the text, bbox from word boxes.
 
@@ -347,11 +394,11 @@ def merge(
     if low_ocr:
         warnings.append(LOW_OCR_WARNING)
 
-    words = words or []
+    words, page_offsets = words or [], page_offsets or [0]
     for name, field in iter_fields(data):
         per_class = class_date_key(name) is not None
         is_date = name in DATE_FIELDS or per_class
-        field.page = page
+        field.page = 1
         field.confidence = "review"
         field.bbox = None
 
@@ -368,14 +415,16 @@ def merge(
             continue
         if per_class:
             field.bbox, on_its_row = _class_row(field, words)
+            field.page = page_of(field.bbox, page_offsets)
             if on_its_row and not low_ocr:
                 field.confidence = "high"
             continue
         anchor = field.source_text or field.value
         field.bbox = match_bbox(anchor, words) or match_bbox_parts(anchor, words)
+        field.page = page_of(field.bbox, page_offsets)
         if low_ocr:
             continue
-        if text_matches_ocr(anchor, ocr_text, is_date=is_date):
+        if text_matches_ocr(anchor, ocr_text, is_date=is_date) or parts_match_ocr(anchor, ocr_text):
             field.confidence = "high"
 
     warnings += check_date_order(data)

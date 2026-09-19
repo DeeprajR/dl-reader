@@ -13,7 +13,7 @@ Upload a driving licence (JPG, PNG or PDF) and get its details as an editable fo
 | Layer | Choice |
 |---|---|
 | Backend | Python 3.11+, FastAPI, uvicorn, pydantic v2 |
-| OCR | Tesseract via `pytesseract` (`image_to_data` for word boxes); `pdf2image` + poppler for PDF page 1 |
+| OCR | Tesseract via `pytesseract` (`image_to_data` for word boxes), with table rulings erased first (NumPy); `pdf2image` + poppler for PDF pages 1–2 (front and back) |
 | LLM | OpenRouter (OpenAI-compatible API) through the `openai` Python SDK; model set by `LLM_MODEL` (default `google/gemini-3.8-flash`) |
 | Embeddings / vector store | `sentence-transformers` `all-MiniLM-L6-v2` + ChromaDB (in-process, persisted to `./chroma`) |
 | Storage | SQLite + uploaded files on disk under `./data/uploads` (server-generated UUID names) |
@@ -27,7 +27,7 @@ Upload a driving licence (JPG, PNG or PDF) and get its details as an editable fo
 
 ```mermaid
 flowchart LR
-    U["Upload<br/>JPG / PNG / PDF"] --> V["Validate extension, magic bytes, size<br/>PDF page 1 to PNG, EXIF rotation"]
+    U["Upload<br/>JPG / PNG / PDF"] --> V["Validate extension, magic bytes, size<br/>PDF pages 1-2 stacked to PNG, EXIF rotation"]
     V --> W[("Working image")]
     subgraph P["In parallel (asyncio.gather)"]
         OCR["Tesseract OCR<br/>full text + word boxes"]
@@ -153,7 +153,7 @@ Once dependencies are installed, day-to-day running is two commands: `uvicorn ap
 
 ```bash
 cd backend
-pytest                  # whole suite, ~10 s
+pytest                  # whole suite, ~17 s
 pytest -m phase1        # Phase 1 gate (steps 1-5)
 pytest -m step6         # a single build step (step1 ... step10)
 ```
@@ -295,31 +295,40 @@ To try another model, set `LLM_MODEL` in `.env`. Re-running `compare_models.py` 
 | `ExtractionProvider` Protocol + factory; `ollama/<model>` routes to a local `OllamaProvider` | Hard-wire one provider | Routes only see the Protocol; the fully local option is one env var away; prompt, parsing and retry are shared, not duplicated |
 | JSON-only prompt + parse + one retry | Strict `json_schema` response mode | Schema mode support varies by provider behind OpenRouter; the parser also accepts code fences, raw newlines and loose shapes |
 | 60 s timeout, one retry (timeouts/429/5xx/invalid JSON); auth/credit/model errors fail fast | SDK auto-retries | Retry behaviour is predictable and the user sees an error within a known time |
-| Small images upscaled to ~2000 px before OCR; EXIF rotation applied to the pixels; PDFs rendered with long side 2000 px | Raw image to Tesseract | Tesseract reads best with glyphs ~30 px tall; OCR boxes and the displayed image always match; huge PDF pages can't exhaust memory |
+| Small images upscaled to ~2000 px before OCR; EXIF rotation applied to the pixels; PDFs rendered with long side 2000 px per page | Raw image to Tesseract | Tesseract reads best with glyphs ~30 px tall; OCR boxes and the displayed image always match; huge PDF pages can't exhaust memory |
 | Images over 2048 px / 4 MB downscaled **for the LLM only** | Send the original | Some providers cap images at 5 MB; OCR still uses full resolution |
+| Erase long, thin straight lines (table rulings) in the OCR copy of the image | Different Tesseract page-segmentation modes; OpenCV table detection | Tesseract drops whole rows of ruled tables. No segmentation mode fixed that on every card, but erasing rulings recovered every row, including the sample's `LMV` cell. Thick banners and the gaps between their letters are kept, and it needs no new dependency |
+| Table rows found by position; per-class dates anchored on the exact full class label | Tesseract line ids; fuzzy or first-word label match | Tesseract may split one row into column blocks; similar codes (LMV / LMV TR, MCWG / MCWOG) would land on the wrong row |
+| PDF pages 1–2 stacked into one working image | Page 1 only (as first specified); a multi-page viewer | Two-sided licences are often scanned as two pages. Stacking keeps a single image, so highlights, OCR and the viewer are unchanged, and each field's `page` follows from its position |
 | RAG: OCR chunks + field chunks, MiniLM in ChromaDB, top 5 | Put the whole document in the prompt | See *AI/LLM approach*; also provides the relevance gate and source provenance |
 | Four-tier chat grounding with exact-string normalisation | Prompt only | The refusal must be *exactly* the spec string; excerpts that aren't relevant never reach the model |
 | SQLite + files on disk, UUID file names, magic-byte validation | ORM / external database / object storage | No infrastructure needed; client filenames are never used as paths |
 | One container: FastAPI serves the API and the built frontend | Separate frontend host + CORS | One port and one origin; the relative `/api` works everywhere; hash routing needs no server-side fallback |
 | CPU-only PyTorch; embedding model baked into the image; runs as uid 1000 | Default torch wheels; downloading at runtime | Avoids ~2 GB of CUDA wheels; no download on first chat, works offline; compatible with Hugging Face Spaces |
-| Tests: FakeProvider via the factory, fake embedder, in-memory Chroma, per-phase gates | Mocking HTTP; running tests against a live model | Deterministic and fast (~7 s), with no network; each build step has explicit pass/fail criteria |
+| Tests: FakeProvider via the factory, fake embedder, in-memory Chroma, per-phase gates | Mocking HTTP; running tests against a live model | Deterministic and fast (under 20 s), with no network; each build step has explicit pass/fail criteria |
 
 ---
 
 ## Known limitations
 
 - **Highlight matching is fuzzy.** Boxes come from matching `source_text` against Tesseract's words. Stylised fonts, text on busy backgrounds and heavy OCR errors can prevent a match. The field then shows its source snippet without a highlight and says "not located on the image"; it never shows a wrong highlight.
-- **Tables are hard for OCR.** On the Maharashtra sample, the vehicle-class table has ruled cells over a watermark. Tesseract never reads the `LMV` cell (none of its page-segmentation modes does, even after binarising) and reads `MCWG` as `/MCWG`. The effects:
-  - `vehicle_classes` stays "Please verify".
-  - A column value such as `LMV\nMCWG` is never consecutive in OCR's row-by-row reading order. So when the whole value can't be matched, each part (line, or comma-separated item) is matched on its own, and the cells OCR could read are highlighted: here, only `MCWG`.
+- **Tables are hard for OCR, so rulings are erased first.** Tesseract's layout analysis treats ruled table regions as graphics and drops whole rows. Without help it never read the Maharashtra sample's `LMV` cell, and on a six-class specimen it dropped half the table. Before OCR, long thin straight lines are whitened in the OCR copy of the image. After that every table row was read on every test card, and the displayed image and highlight coordinates are unchanged. Two things are kept on purpose:
+  - **Title banners** (white text on a coloured bar) are thick, so they are left alone.
+  - **The dark gaps between a banner's letters** are thin only beside the letters, so they aren't mistaken for rulings.
+  Unusual layouts (dotted rulings, rulings touching the text) can still lose rows. The affected fields then fall back to "Please verify".
+- **Table columns are matched part by part.** A column value such as `LMV\nMCWG` is never consecutive in OCR's row-by-row reading order. So when the whole value can't be matched, each part (a line, or a comma-separated item) is matched on its own, both for the highlight and for confirmation. Parts shorter than 3 characters (codes like `A` or `C1`) can't be checked safely, so such values stay "Please verify".
 - **Per-class dates live in extra fields.** Each vehicle class can have its own issue and valid-till dates: classes are added at different times, and transport classes expire sooner than non-transport (NT) ones. The schema has no core field for these, so when a card prints them the extraction adds two fields per class, e.g. `lmv_date_of_issue` and `mcwg_valid_till`. The form shows them as "LMV · Date of issue" and so on, and they are checked for date order and validated as dates on save. Their `source_text` is the class's table row.
-  - **Anchoring on the class label:** the same dates often repeat on every row, and classes look alike (LMV / LMV NT / LMV TR, MCWG / MCWOG). So a per-class date is located by its row's *full* class label, which must match exactly the cell just before that row's first date, on exactly one row. A fuzzy or first-word match would land on a neighbouring class. The date is `high` only when it is printed on that row. An unreadable or ambiguous label gives no highlight.
-  - **Many classes:** the extraction handles any number of classes. A fictional six-class specimen came out with all 12 dates correct. Two limits remain:
-    - **OCR on ruled tables:** Tesseract's automatic layout analysis can drop whole rows of a ruled table. On the specimen it read only the last three of six rows, so those three classes are confirmed and highlighted and the rest stay "Please verify".
-    - **Chat on many classes:** chat retrieves the spec's top 5 excerpts, so a question about *all* classes may see only some of them. The answer then says which dates it couldn't see, rather than guessing.
-  - **On the sample:** the MCWG dates are confirmed and highlighted. The LMV dates get no highlight and stay "Please verify", because OCR can't read the LMV cell.
+  - **Anchoring on the class label:** the same dates often repeat on every row, and classes look alike (LMV / LMV NT / LMV TR, MCWG / MCWOG). So a per-class date is located by its row's *full* class label.
+    - **Where the row is:** rows are found by position (words at the same height), because Tesseract may split one table row into separate column blocks.
+    - **The match:** the label must match exactly the words just before a date on exactly one row, and the date is `high` only when it is printed on that row.
+    - **No guessing:** an unreadable or ambiguous label gives no highlight rather than a neighbouring class's row.
+  - **Many classes:** tested on a fictional six-class licence (MCWOG, MCWG, LMV, LMV-TR, HGMV, HPMV, each with its own dates). All 12 dates were extracted correctly, confirmed and highlighted on their own rows. The spec's chat retrieves only the top 5 excerpts, so one extra chunk lists every class's dates. A question about *all* classes then gets a complete answer.
 - **Where images go (PII).** With the default setup, images and chat excerpts are sent through OpenRouter to the underlying model provider. This is mitigated by OpenRouter's zero-data-retention / no-training provider routing setting, which is enabled on the account. Through the provider abstraction (`ExtractionProvider` + `get_provider`), setting `LLM_MODEL=ollama/<model>` runs a fully local Ollama model instead, so no personal data leaves the machine (see *Fully local option*). OCR, embeddings and retrieval always run locally.
-- **PDFs: page 1 only.** Multi-page PDFs are accepted, but only the first page is read.
+- **Two-sided licences.**
+  - **One image with both sides**, side by side or stacked, works as it is. On a fictional two-sided licence in both layouts, every field from both sides was extracted, confirmed and highlighted on the correct side.
+  - **A two-page PDF** (front, then back) has its first two pages stacked into one image. Each field's `page` is 1 or 2, depending on where it is found; fields that can't be located default to 1. Pages after the second are ignored.
+  - **Front and back as two separate image files** become two separate documents, because pairing uploads isn't supported.
+  - **Resolution:** each side gets only part of the image's pixels, so low-resolution composites read less reliably.
 - **No authentication or multiple users.** Anyone who can reach the server can see every upload. Run it locally or behind your own access control.
 - **Data is session-scoped by design.** Uploads, extractions and the vector index live in `./data` and `./chroma` in the running instance. A container without a volume loses them when it is removed. There is no long-term storage of personal documents.
 - **Confidence means agreement, not correctness.** A value that the LLM and OCR both misread the same way would be marked `high`. Human review of the flagged fields is still part of the workflow.

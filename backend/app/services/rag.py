@@ -15,7 +15,7 @@ from chromadb.errors import NotFoundError
 
 from app.schemas import Box, ChatResponse, ChatSource, ExtractionResult, FieldValue
 from app.services import storage
-from app.services.extraction import iter_fields, match_bbox, normalize
+from app.services.extraction import class_date_key, iter_fields, match_bbox, normalize
 from app.services.providers import ollama
 from app.services.providers.base import OLLAMA_PREFIX, ProviderError, chat_model, is_local
 from app.services.providers.openrouter import complete, openrouter_client
@@ -138,6 +138,26 @@ def field_chunk(name: str, field: FieldValue) -> str:
     return f"Field: {key} = {field.value} (source: '{source}')" if source else f"Field: {key} = {field.value}"
 
 
+def class_validity_chunk(data) -> str | None:
+    """One chunk with every vehicle class's dates, derived from the per-class fields.
+
+    With many classes the per-class fields are many small chunks, and top-5 retrieval cannot
+    return all of them for a question about every class; this chunk answers it in one piece.
+    """
+    classes: dict[str, dict[str, str]] = {}
+    for key, field in data.other_fields.items():
+        if (m := class_date_key(key)) and field.value:
+            classes.setdefault(m["cls"], {})[m["kind"]] = field.value
+    if not classes:
+        return None
+    parts = []
+    for cls, dates in classes.items():
+        label = cls.upper().replace("_", " ")
+        issued, till = dates.get("date_of_issue", "not printed"), dates.get("valid_till", "not printed")
+        parts.append(f"{label}: issued {issued}, valid till {till}")
+    return "Vehicle class validity (all classes): " + "; ".join(parts)
+
+
 # --- indexing -------------------------------------------------------------------------------
 
 
@@ -156,6 +176,8 @@ def index_document(doc_id: str, result: ExtractionResult) -> None:
         for name, field in iter_fields(result.data)
         if field.value is not None
     ]
+    if summary := class_validity_chunk(result.data):
+        items.append((summary, "extracted_fields", None))
     texts = [text for text, _, _ in items]
     embeddings = _embed(texts) if texts else []
 

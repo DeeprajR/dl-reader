@@ -35,7 +35,9 @@ _MAGIC = {"jpeg": b"\xff\xd8\xff", "png": b"\x89PNG\r\n\x1a\n", "pdf": b"%PDF-"}
 _MEDIA_TYPES = {"jpeg": "image/jpeg", "png": "image/png"}
 _KIND_NAMES = {"jpeg": "JPEG", "png": "PNG", "pdf": "PDF"}
 _EXIF_ORIENTATION = 0x0112
-_PDF_LONG_SIDE = 2000  # render page 1 so its longest side is this many pixels (bounds huge pages)
+_PDF_LONG_SIDE = 2000  # render each page so its longest side is this many pixels (bounds huge pages)
+_PDF_PAGES = 2  # front and back of a two-sided licence
+_PAGE_GAP = 24  # white pixels between stacked pages
 _CHUNK = 1024 * 1024
 # Vision models cap image size (some at 5 MB); larger working images are downscaled for the LLM
 # only. OCR always runs on the full-resolution working image.
@@ -84,10 +86,25 @@ def _to_png(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, str, int, int]:
+def _stack(pages: list[Image.Image]) -> tuple[Image.Image, list[int]]:
+    """Pages top to bottom on one white canvas; returns it and each page's top y offset."""
+    width = max(p.width for p in pages)
+    height = sum(p.height for p in pages) + _PAGE_GAP * (len(pages) - 1)
+    canvas = Image.new("RGB", (width, height), "white")
+    offsets, y = [], 0
+    for page in pages:
+        canvas.paste(page.convert("RGB"), (0, y))
+        offsets.append(y)
+        y += page.height + _PAGE_GAP
+    return canvas, offsets
+
+
+def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, str, int, int, list[int]]:
     """Validate the content and produce the working image.
 
-    Returns (image_bytes or None if the original is used as-is, image_ext, media_type, width, height).
+    Returns (image_bytes or None if the original is used as-is, image_ext, media_type, width,
+    height, page_offsets). A PDF's first two pages (front and back) are stacked into one image;
+    page_offsets holds each page's top y, so a field's page follows from where it is found.
     """
     if kind == "pdf":
         try:
@@ -95,7 +112,7 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
                 data,
                 size=_PDF_LONG_SIDE,
                 first_page=1,
-                last_page=1,
+                last_page=_PDF_PAGES,
                 poppler_path=poppler_path(),
             )
         except PDFInfoNotInstalledError:
@@ -106,8 +123,8 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
             raise HTTPException(400, "Could not read the PDF. The file may be damaged or password-protected.")
         if not pages:
             raise HTTPException(400, "The PDF has no pages.")
-        page = pages[0]
-        return _to_png(page), ".png", "image/png", page.width, page.height
+        working, offsets = _stack(pages)
+        return _to_png(working), ".png", "image/png", working.width, working.height, offsets
 
     try:
         with Image.open(io.BytesIO(data)) as img:
@@ -115,8 +132,8 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
             # Bake EXIF rotation into the pixels so OCR boxes and the displayed image agree.
             if img.getexif().get(_EXIF_ORIENTATION, 1) != 1:
                 upright = ImageOps.exif_transpose(img)
-                return _to_png(upright), ".png", "image/png", upright.width, upright.height
-            return None, "", _MEDIA_TYPES[kind], img.width, img.height
+                return _to_png(upright), ".png", "image/png", upright.width, upright.height, [0]
+            return None, "", _MEDIA_TYPES[kind], img.width, img.height, [0]
     except Exception:
         raise HTTPException(400, "Could not read the image. The file may be damaged.")
 
@@ -154,7 +171,7 @@ async def upload_document(file: UploadFile | None = File(None)):
             400, f"The file content is not a valid {_KIND_NAMES[kind]}, although its name ends in {ext}."
         )
 
-    image, image_ext, media_type, width, height = await run_in_threadpool(
+    image, image_ext, media_type, width, height, page_offsets = await run_in_threadpool(
         prepare_working_image, kind, data
     )
     doc_id = storage.save_document(
@@ -167,6 +184,7 @@ async def upload_document(file: UploadFile | None = File(None)):
         width=width,
         height=height,
         page_number=1,
+        page_offsets=page_offsets,
     )
     return {"doc_id": doc_id}
 
@@ -231,7 +249,7 @@ async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
         warnings.append("No driving licence fields were found. Is this image a driving licence?")
 
     data, merge_warnings = extraction.merge(
-        llm_data, ocr_result.text, words=ocr_result.words, page=doc["page_number"]
+        llm_data, ocr_result.text, words=ocr_result.words, page_offsets=storage.page_offsets(doc)
     )
     result = ExtractionResult(
         doc_id=doc_id, data=data, ocr_text=ocr_result.text, warnings=warnings + merge_warnings

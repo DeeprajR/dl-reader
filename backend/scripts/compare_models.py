@@ -36,9 +36,9 @@ COL_FIELD, COL_VALUE, COL_AGREE = 30, 36, 6
 
 
 def load_sample(path: Path) -> tuple[bytes, str]:
-    """Same preparation as an upload + extraction in the app (PDF page 1, LLM downscale)."""
+    """Same preparation as an upload + extraction in the app (PDF pages 1-2, LLM downscale)."""
     data = path.read_bytes()
-    image, _, media_type, _, _ = prepare_working_image(_EXTENSIONS[path.suffix.lower()], data)
+    image, _, media_type, _, _, _ = prepare_working_image(_EXTENSIONS[path.suffix.lower()], data)
     return image_for_llm(image if image is not None else data, media_type)
 
 

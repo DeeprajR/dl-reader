@@ -131,3 +131,25 @@ def test_unknown_document_is_404_json(client, method, path, doc_id):
 def test_unknown_api_route_is_json_error(client):
     assert_error(client.get("/api/nope"), 404)
     assert_error(client.delete("/api/documents"), 405)
+
+
+def multipage_pdf(n, size=(850, 1100)):
+    buf = io.BytesIO()
+    pages = [Image.new("RGB", size, "white") for _ in range(n)]
+    pages[0].save(buf, "PDF", save_all=True, append_images=pages[1:])
+    return buf.getvalue()
+
+
+@pytest.mark.skipif(not poppler_available(), reason="poppler (pdftoppm) not installed")
+def test_two_page_pdf_stacks_front_and_back(client):
+    from app.services import storage
+
+    one = client.get(f"/api/documents/{upload(client, multipage_pdf(1), 'a.pdf', 'application/pdf').json()['doc_id']}/meta").json()
+    doc_id = upload(client, multipage_pdf(2), "b.pdf", "application/pdf").json()["doc_id"]
+    two = client.get(f"/api/documents/{doc_id}/meta").json()
+    assert two["width"] == one["width"]
+    assert two["height"] == 2 * one["height"] + 24  # page 2 below page 1, 24px gap
+    assert storage.page_offsets(storage.get_document(doc_id)) == [0, one["height"] + 24]
+
+    doc_id = upload(client, multipage_pdf(3), "c.pdf", "application/pdf").json()["doc_id"]
+    assert client.get(f"/api/documents/{doc_id}/meta").json() == two  # only front and back are read

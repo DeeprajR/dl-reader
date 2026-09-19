@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS documents (
     original_name   TEXT NOT NULL,     -- stored file name of the upload
     image_name      TEXT NOT NULL,     -- stored file name of the working image
     media_type      TEXT NOT NULL,     -- media type of the working image
-    page_number     INTEGER NOT NULL,  -- source page of the working image (PDFs: 1)
+    page_number     INTEGER NOT NULL,  -- first source page of the working image (PDFs: 1)
+    page_offsets    TEXT,              -- JSON top y of each stacked PDF page; NULL = one page
     width           INTEGER NOT NULL,
     height          INTEGER NOT NULL,
     uploaded_at     TEXT NOT NULL,
@@ -42,6 +43,8 @@ def init(data_dir: Path | str | None = None) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)")}
         if "ocr_words" not in columns:  # databases created before word boxes were stored
             conn.execute("ALTER TABLE documents ADD COLUMN ocr_words TEXT")
+        if "page_offsets" not in columns:  # databases created before two-page PDFs
+            conn.execute("ALTER TABLE documents ADD COLUMN page_offsets TEXT")
 
 
 def uploads_dir() -> Path:
@@ -70,6 +73,7 @@ def save_document(
     width: int,
     height: int,
     page_number: int = 1,
+    page_offsets: list[int] | None = None,
 ) -> str:
     """Persist an upload. `image=None` means the original itself is the working image."""
     doc_id = str(uuid.uuid4())
@@ -84,7 +88,7 @@ def save_document(
     with _connect() as conn:
         conn.execute(
             "INSERT INTO documents (doc_id, filename_label, original_name, image_name, media_type,"
-            " page_number, width, height, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " page_number, width, height, uploaded_at, page_offsets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 doc_id,
                 filename_label,
@@ -95,6 +99,7 @@ def save_document(
                 width,
                 height,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                json.dumps(page_offsets or [0]),
             ),
         )
     return doc_id
@@ -113,6 +118,11 @@ def list_documents() -> list[dict]:
             " FROM documents ORDER BY uploaded_at DESC, rowid DESC"
         ).fetchall()
     return [{**dict(r), "has_extraction": bool(r["has_extraction"])} for r in rows]
+
+
+def page_offsets(doc: dict) -> list[int]:
+    """Top y of each page stacked in the working image ([0] for a single page)."""
+    return json.loads(doc.get("page_offsets") or "[0]")
 
 
 def image_path(doc: dict) -> Path:

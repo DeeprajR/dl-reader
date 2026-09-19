@@ -62,7 +62,7 @@ export default function UploadView() {
         <div>
           <h1 className="text-xl font-semibold">Upload a driving licence</h1>
           <p className="mt-1 text-sm text-slate-600">
-            JPG, PNG or PDF up to {MAX_MB} MB. For PDFs, the first page is used.
+            JPG, PNG or PDF up to {MAX_MB} MB. For PDFs, the first two pages (front and back) are used.
           </p>
         </div>
 

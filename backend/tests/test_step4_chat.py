@@ -185,3 +185,28 @@ def test_retrieval_ranks_the_matching_chunk_first(client, extracted):
     top = rag.retrieve(extracted, "licence_number MH12 20190001234")[0]
     assert "MH12 20190001234" in top["text"]
     assert 0 <= top["distance"] <= rag.MAX_DISTANCE
+
+
+def test_class_validity_summary_chunk():
+    from conftest import fv, make_licence
+
+    data = make_licence(other_fields={
+        "lmv_date_of_issue": fv("2019-06-16"), "lmv_valid_till": fv("2034-06-15"),
+        "lmv_tr_valid_till": fv("2021-03-11"), "blood_group": fv("O+"),
+    })
+    assert rag.class_validity_chunk(data) == (
+        "Vehicle class validity (all classes): LMV: issued 2019-06-16, valid till 2034-06-15; "
+        "LMV TR: issued not printed, valid till 2021-03-11"
+    )
+    assert rag.class_validity_chunk(make_licence()) is None  # no per-class fields, no summary
+
+
+def test_summary_chunk_is_indexed_only_when_classes_have_dates(client, extracted):
+    documents = rag._chroma().get_collection(f"doc_{extracted}").get()["documents"]
+    assert not any(d.startswith("Vehicle class validity") for d in documents)  # canned licence has none
+
+    data = client.get(f"/api/documents/{extracted}/extract").json()["data"]
+    data["other_fields"]["mcwg_valid_till"] = {**data["other_fields"]["blood_group"], "value": "2035-06-04"}
+    client.put(f"/api/documents/{extracted}/data", json=data)
+    documents = rag._chroma().get_collection(f"doc_{extracted}").get()["documents"]
+    assert "Vehicle class validity (all classes): MCWG: issued not printed, valid till 2035-06-04" in documents
