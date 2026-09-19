@@ -1,0 +1,19 @@
+# Secrets: the API key is passed at runtime with --env-file, never baked into the image
+.env
+**/.env
+
+# Documents and runtime data contain PII
+samples
+data
+chroma
+backend/data
+backend/chroma
+
+# Local environments and build output (rebuilt inside the image)
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+frontend/dist
+.git
+plan.md

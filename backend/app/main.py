@@ -48,7 +48,7 @@ def startup_checks() -> None:
             "run, but nothing can be cross-checked: every field will be flagged for review."
         )
 
-    poppler_dir = os.getenv("POPPLER_PATH")
+    poppler_dir = documents.poppler_path()
     if not (shutil.which("pdftoppm", path=poppler_dir) if poppler_dir else shutil.which("pdftoppm")):
         logger.warning("poppler (pdftoppm) was not found (set POPPLER_PATH or add it to PATH). PDF uploads will fail.")
 

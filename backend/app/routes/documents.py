@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -40,6 +41,19 @@ _CHUNK = 1024 * 1024
 # only. OCR always runs on the full-resolution working image.
 _LLM_MAX_SIDE = 2048
 _LLM_MAX_BYTES = 4 * 1024 * 1024
+
+
+def poppler_path() -> str | None:
+    """POPPLER_PATH if it is a real directory, else rely on poppler being on PATH.
+
+    Falling back keeps one .env usable both locally and in the container.
+    """
+    path = os.getenv("POPPLER_PATH")
+    if path and Path(path).is_dir():
+        return path
+    if path:
+        logger.warning("POPPLER_PATH does not exist (%s); falling back to poppler on PATH", path)
+    return None
 
 
 def max_upload_mb() -> float:
@@ -82,7 +96,7 @@ def prepare_working_image(kind: str, data: bytes) -> tuple[bytes | None, str, st
                 size=_PDF_LONG_SIDE,
                 first_page=1,
                 last_page=1,
-                poppler_path=os.getenv("POPPLER_PATH") or None,
+                poppler_path=poppler_path(),
             )
         except PDFInfoNotInstalledError:
             raise HTTPException(
