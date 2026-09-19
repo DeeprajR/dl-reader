@@ -116,7 +116,7 @@ sudo apt install tesseract-ocr poppler-utils
 
 **Windows**: either of these:
 
-- Install the **UB Mannheim** Tesseract build (<https://github.com/UB-Mannheim/tesseract/wiki>) and a **poppler-windows** release (<https://github.com/oschwartz10612/poppler-windows/releases>). Both are also available through winget: `winget install UB-Mannheim.TesseractOCR` and `winget install oschwartz10612.Poppler`.
+- Install the **UB Mannheim** Tesseract build (<https://github.com/UB-Mannheim/tesseract/wiki>) and a **poppler-windows** release (<https://github.com/oschwartz10612/poppler-windows/releases>).
 - Or use conda: `conda install -c conda-forge tesseract poppler`.
 
 The Windows installers usually don't add the tools to `PATH`. In that case, point to them in `.env` (next step):
@@ -154,7 +154,7 @@ POPPLER_PATH=
 cd backend
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements.txt      # Linux tip: first `pip install torch --index-url https://download.pytorch.org/whl/cpu` to skip CUDA
+pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -197,15 +197,12 @@ Open <http://localhost:7860>. One container serves both the API and the built fr
 
 ```bash
 ollama pull qwen2.5vl:3b
-# or run Ollama itself in Docker:
-docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
-docker exec ollama ollama pull qwen2.5vl:3b
 ```
 
 Then set `LLM_MODEL=ollama/qwen2.5vl:3b` in `.env`.
 - **Everything stays local.** Extraction and chat both run on the local model, so no image, OCR text or chat excerpt leaves the machine, and no OpenRouter key is needed.
 - **Server address.** The app finds Ollama through Ollama's own `OLLAMA_HOST` setting (default `http://127.0.0.1:11434`). From inside Docker, use `OLLAMA_HOST=http://host.docker.internal:11434`.
-- **Speed.** A vision model on CPU typically takes 30–60 s per licence. On a 6 GB GPU, `qwen2.5vl:3b` took about 20 s per licence once warm, and about 3 minutes on the first request while the model loads. Ollama calls therefore get a 300 s timeout.
+- **Speed.** A vision model on CPU typically takes 30–60 s per licence, and the first request also loads the model. Ollama calls therefore get a 300 s timeout.
 
 ### Optional: compare two models
 
@@ -218,9 +215,8 @@ It prints a field-by-field table per document (`field | model A | model B | agre
 
 ### Deployment
 
-- **Dockerfile.** The multi-stage Dockerfile produces one image that serves everything. It listens on port **7860**, the Hugging Face Spaces convention; change it with the `PORT` environment variable.
-- **Hugging Face Spaces:** create a Docker Space, push the repository, and add `OPENROUTER_API_KEY` as a Space secret. The container already runs as uid 1000, as Spaces requires. Spaces reads its settings from a YAML header in the Space's README, e.g. `sdk: docker` and `app_port: 7860`.
-- **Cold starts:** the image is about 3 GB (CPU PyTorch, ChromaDB and the baked-in embedding model), so the first pull takes a while. After that the server starts in seconds. Free Spaces sleep when idle; waking one takes tens of seconds.
+- **Dockerfile.** The multi-stage Dockerfile produces one image that serves everything, running as a non-root user. It listens on port **7860**; change it with the `PORT` environment variable.
+- **Cold starts:** the image is about 3 GB (CPU PyTorch, ChromaDB and the baked-in embedding model), so the first pull takes a while. After that the server starts in seconds.
 - **Network:** the container needs outbound HTTPS to `openrouter.ai`, unless it uses a local Ollama model.
 
 ---
@@ -245,8 +241,6 @@ The two engines fail differently. **OCR** makes *recognition* errors: a misread 
 3. **Which date is which.** The model maps labels such as "DOI" or "Valid Till" to fields by meaning, and the prompt names the common labels for each date. The printed label is kept in the source (`Source: DOI: 16-06-2019`), so a reviewer can see where each date came from. A mix-up would still pass the OCR check, because both dates are printed. So a separate check flags impossible orders: birth before issue before expiry, for the licence and for each vehicle class, and no issue or birth date in the future.
 4. **Grounding the reviewer can see.** Every field shows its source text, and most can be highlighted on the image, so checking a field takes a glance.
 5. **Fail-safe defaults.** Empty fields are always "Please verify". If OCR finds fewer than 20 characters, every field is flagged, because the cross-check can't be trusted.
-
-In testing this caught real mistakes. One model invented `country: India` for a card that doesn't print it, and a small local model did the same. In both cases the cross-check flagged the field for review.
 
 ### Grounded chat with retrieval
 
@@ -294,7 +288,7 @@ The app works with any model: `LLM_MODEL` accepts any OpenRouter model that take
 | Four-tier grounded chat with exact refusal | Prompt only | The refusal must be exactly the required sentence, and irrelevant excerpts never reach the model |
 | SQLite + files on disk, UUID names, magic-byte checks | External database; object storage | No infrastructure to run; client filenames are never used as paths |
 | One container serving API and frontend | Separate frontend hosting + CORS | One port and origin; the relative `/api` path works everywhere |
-| CPU-only PyTorch, embedding model baked in, runs as uid 1000 | Default PyTorch wheels; downloading at runtime | Avoids ~2 GB of GPU libraries, works offline, fits Hugging Face Spaces |
+| CPU-only PyTorch, embedding model baked in, non-root user | Default PyTorch wheels; downloading at runtime | Avoids ~2 GB of GPU libraries, works offline, and the container doesn't run as root |
 | Tests with a fake provider, fake embeddings and in-memory Chroma | Tests against a live model | Fast (~15 s), repeatable and offline; each build step can be checked on its own |
 
 ---
@@ -314,4 +308,4 @@ The app works with any model: `LLM_MODEL` accepts any OpenRouter model that take
 
 ## AI development tools used
 
-- **Claude Code** (Anthropic's agentic coding tool, in VS Code) with **Claude Opus 5**. It was used to implement the backend, frontend, tests and Dockerfile, to run the model comparison, and to verify each build step in a real browser with Playwright scripts driving Microsoft Edge.
+- **Claude Code** (Anthropic's agentic coding tool, in VS Code) with **Claude Opus 5**. It was used to implement the backend, frontend, tests and Dockerfile, to run the model comparison, and to verify each build step in a real browser with Playwright scripts.
