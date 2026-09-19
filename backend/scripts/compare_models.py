@@ -9,6 +9,7 @@ for a human to judge which model should be the default.
 """
 
 import asyncio
+import os
 import sys
 import textwrap
 import time
@@ -18,12 +19,33 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = BACKEND_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
+
+def _reexec_in_venv() -> None:
+    """Run with backend/.venv's Python when started from another interpreter.
+
+    Saves the usual "ModuleNotFoundError: pdf2image" when the venv is not activated.
+    """
+    if sys.prefix != sys.base_prefix:
+        return  # already inside a virtual environment
+    venv_dir = BACKEND_DIR / ".venv"
+    candidates = (venv_dir / "Scripts" / "python.exe", venv_dir / "bin" / "python")
+    python = next((p for p in candidates if p.is_file()), None)
+    if python is None:
+        return
+    print(f"Using {python}", file=sys.stderr)
+    if os.name == "nt":  # os.execv on Windows detaches from the console; wait instead
+        import subprocess
+
+        sys.exit(subprocess.call([str(python), *sys.argv]))
+    os.execv(str(python), [str(python), *sys.argv])
+
+
+_reexec_in_venv()
+
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(REPO_DIR / ".env")
-
-import os  # noqa: E402
 
 from app.routes.documents import _EXTENSIONS, image_for_llm, prepare_working_image  # noqa: E402
 from app.schemas import LicenceData  # noqa: E402
