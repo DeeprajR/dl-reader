@@ -51,12 +51,7 @@ export default function DocumentListView() {
         )}
         {!error && docs === null && <p className="px-6 pb-6 text-sm text-slate-500">Loading…</p>}
         {!error && docs?.length === 0 && (
-          <div className="px-6 pb-8 pt-2 text-center">
-            <p className="text-slate-600">No documents yet.</p>
-            <a href="#/upload" className="mt-2 inline-block text-sm font-medium text-blue-700 hover:underline">
-              Upload your first licence →
-            </a>
-          </div>
+          <p className="px-6 pb-8 pt-2 text-center text-slate-600">No documents yet.</p>
         )}
         {!error && docs?.length > 0 && (
           <ul className="divide-y divide-slate-100 border-t border-slate-100">

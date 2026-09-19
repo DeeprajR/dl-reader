@@ -16,7 +16,8 @@ export default function App() {
               <img src="/favicon.svg" alt="" className="h-6 w-6" />
               Licence Reader
             </a>
-            {route.view !== 'upload' && (
+            {/* Home has its own prominent upload button; document pages have no other. */}
+            {route.view === 'workspace' && (
               <a
                 href="#/upload"
                 className="rounded-md bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-800"
