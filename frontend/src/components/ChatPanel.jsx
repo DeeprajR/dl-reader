@@ -4,6 +4,15 @@ import { api } from '../api.js'
 const MAX_CHARS = 1000
 const ORIGIN_LABELS = { ocr_text: 'Document text', extracted_fields: 'Extracted field' }
 
+// Models sometimes format answers as Markdown. Show them as tidy plain text (never as HTML):
+// `code` spans keep their quote as “…”, bold markers are dropped, list markers become bullets.
+function tidyAnswer(text) {
+  return text
+    .replace(/`([^`\n]+)`/g, '“$1”')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/^[ \t]*[*-][ \t]+/gm, '• ')
+}
+
 // Each source is expandable; expanding one with a bbox highlights it on the document.
 function Sources({ messageId, sources, activeSourceId, onSourceSelect }) {
   if (!sources.length) return null
@@ -66,7 +75,7 @@ function Message({ message, messageId, activeSourceId, onSourceSelect }) {
   }
   return (
     <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-100 px-4 py-2 text-sm text-slate-900">
-      <p className="whitespace-pre-wrap">{message.text}</p>
+      <p className="whitespace-pre-wrap">{tidyAnswer(message.text)}</p>
       <Sources
         messageId={messageId}
         sources={message.sources}
