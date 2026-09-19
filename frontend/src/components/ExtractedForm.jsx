@@ -2,17 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { useToast } from './Toast.jsx'
 import ErrorMessage from './ErrorMessage.jsx'
-
-const CORE_FIELDS = [
-  { name: 'full_name', label: 'Full name' },
-  { name: 'licence_number', label: 'Licence number' },
-  { name: 'date_of_birth', label: 'Date of birth', kind: 'date' },
-  { name: 'date_of_issue', label: 'Date of issue', kind: 'date' },
-  { name: 'date_of_expiry', label: 'Date of expiry', kind: 'date' },
-  { name: 'address', label: 'Address', kind: 'multiline' },
-  { name: 'vehicle_classes', label: 'Vehicle classes' },
-  { name: 'issuing_authority', label: 'Issuing authority' },
-]
+import { fieldDomId, listFields } from '../fields.js'
 
 // Progress text while POST /extract runs (a single request, so stages are time-based).
 const STAGES = [
@@ -21,13 +11,9 @@ const STAGES = [
   { at: 9000, text: 'Verifying…' },
 ]
 
-function humanize(key) {
-  const s = key.replace(/_/g, ' ').trim()
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
-function Field({ id, label, kind, field, onChange }) {
+function Field({ id, label, kind, field, active, onChange, onFocus }) {
   const review = field.confidence === 'review'
+  const locatable = field.bbox && field.value != null
   const Input = kind === 'multiline' ? 'textarea' : 'input'
   return (
     <div>
@@ -45,10 +31,14 @@ function Field({ id, label, kind, field, onChange }) {
         id={id}
         value={field.value ?? ''}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={onFocus}
+        onClick={onFocus}
         rows={kind === 'multiline' ? 3 : undefined}
         placeholder={kind === 'date' ? 'YYYY-MM-DD' : field.value == null ? 'Not found on the document' : ''}
         aria-describedby={`${review ? `${id}-hint ` : ''}${id}-source`}
         className={`mt-1 block w-full rounded-md border px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 ${
+          active && locatable ? 'ring-2 ring-blue-300 ' : ''
+        }${
           review
             ? 'border-amber-400 bg-amber-50/50 focus:border-amber-500 focus:ring-amber-200'
             : 'border-slate-300 bg-white focus:border-blue-500 focus:ring-blue-200'
@@ -56,6 +46,9 @@ function Field({ id, label, kind, field, onChange }) {
       />
       <p id={`${id}-source`} className="mt-1 whitespace-pre-line text-xs text-slate-500">
         Source: {field.source_text ?? <em>not found on the document</em>}
+        {field.value != null && field.source_text && !field.bbox && (
+          <span className="text-slate-400"> · not located on the image</span>
+        )}
       </p>
     </div>
   )
@@ -80,7 +73,9 @@ function ExtractionProgress({ stage }) {
   )
 }
 
-export default function ExtractedForm({ docId }) {
+// onBoxesChange([{ key, label, box, confidence }]) reports highlightable fields to the viewer;
+// onFieldFocus(key) tells it which one to emphasise.
+export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxesChange }) {
   const toast = useToast()
   const [status, setStatus] = useState('loading') // loading | extracting | ready | error
   const [stage, setStage] = useState(0)
@@ -145,12 +140,22 @@ export default function ExtractedForm({ docId }) {
     load()
   }, [load])
 
-  function updateCore(name, value) {
-    setForm((f) => ({ ...f, [name]: { ...f[name], value } }))
-  }
+  // Fields with a bbox (and a value) become clickable highlights on the document.
+  useEffect(() => {
+    if (!form) return
+    onBoxesChange?.(
+      listFields(form)
+        .filter(({ field }) => field.bbox && field.value != null)
+        .map(({ key, label, field }) => ({ key, label, box: field.bbox, confidence: field.confidence })),
+    )
+  }, [form, onBoxesChange])
 
-  function updateOther(key, value) {
-    setForm((f) => ({ ...f, other_fields: { ...f.other_fields, [key]: { ...f.other_fields[key], value } } }))
+  function update(key, value) {
+    setForm((f) => {
+      if (!key.startsWith('other_fields.')) return { ...f, [key]: { ...f[key], value } }
+      const k = key.slice('other_fields.'.length)
+      return { ...f, other_fields: { ...f.other_fields, [k]: { ...f.other_fields[k], value } } }
+    })
   }
 
   async function save(e) {
@@ -186,10 +191,22 @@ export default function ExtractedForm({ docId }) {
   }
 
   const dirty = JSON.stringify(form) !== JSON.stringify(saved)
-  const otherKeys = Object.keys(form.other_fields)
-  const reviewCount = [...CORE_FIELDS.map((f) => form[f.name]), ...Object.values(form.other_fields)].filter(
-    (f) => f.confidence === 'review',
-  ).length
+  const fields = listFields(form)
+  const core = fields.filter((f) => !f.key.startsWith('other_fields.'))
+  const other = fields.filter((f) => f.key.startsWith('other_fields.'))
+  const reviewCount = fields.filter(({ field }) => field.confidence === 'review').length
+  const renderField = (f) => (
+    <Field
+      key={f.key}
+      id={fieldDomId(f.key)}
+      label={f.label}
+      kind={f.kind}
+      field={f.field}
+      active={activeField === f.key}
+      onChange={(v) => update(f.key, v)}
+      onFocus={() => onFieldFocus?.(f.key)}
+    />
+  )
 
   return (
     <form onSubmit={save}>
@@ -207,31 +224,14 @@ export default function ExtractedForm({ docId }) {
             : `${reviewCount} field${reviewCount === 1 ? '' : 's'} could not be confirmed against the document text. Please verify the highlighted fields.`}
         </p>
 
-        {CORE_FIELDS.map((f) => (
-          <Field
-            key={f.name}
-            id={`field-${f.name}`}
-            label={f.label}
-            kind={f.kind}
-            field={form[f.name]}
-            onChange={(v) => updateCore(f.name, v)}
-          />
-        ))}
+        {core.map(renderField)}
 
-        {otherKeys.length > 0 && (
+        {other.length > 0 && (
           <>
             <h3 className="border-t border-slate-200 pt-5 text-sm font-semibold uppercase tracking-wide text-slate-500">
               Other details
             </h3>
-            {otherKeys.map((key) => (
-              <Field
-                key={key}
-                id={`field-other-${key}`}
-                label={humanize(key)}
-                field={form.other_fields[key]}
-                onChange={(v) => updateOther(key, v)}
-              />
-            ))}
+            {other.map(renderField)}
           </>
         )}
       </div>

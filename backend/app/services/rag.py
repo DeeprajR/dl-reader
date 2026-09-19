@@ -14,7 +14,8 @@ from chromadb.config import Settings
 from chromadb.errors import NotFoundError
 
 from app.schemas import Box, ChatResponse, ChatSource, ExtractionResult, FieldValue
-from app.services.extraction import iter_fields, normalize
+from app.services import storage
+from app.services.extraction import iter_fields, match_bbox, normalize
 from app.services.providers.base import ProviderError, chat_model
 from app.services.providers.openrouter import complete, openrouter_client
 
@@ -140,8 +141,15 @@ def field_chunk(name: str, field: FieldValue) -> str:
 
 
 def index_document(doc_id: str, result: ExtractionResult) -> None:
-    """(Re)build the document's collection: OCR text chunks + one chunk per extracted field."""
-    items: list[tuple[str, str, Box | None]] = [(c, "ocr_text", None) for c in chunk_ocr_text(result.ocr_text)]
+    """(Re)build the document's collection: OCR text chunks + one chunk per extracted field.
+
+    Field chunks carry the field's bbox; OCR chunks are matched to word boxes best-effort
+    (same matcher as the fields) so chat sources can be highlighted on the image.
+    """
+    words = storage.get_ocr_words(doc_id)
+    items: list[tuple[str, str, Box | None]] = [
+        (chunk, "ocr_text", match_bbox(chunk, words)) for chunk in chunk_ocr_text(result.ocr_text)
+    ]
     items += [
         (field_chunk(name, field), "extracted_fields", field.bbox)
         for name, field in iter_fields(result.data)

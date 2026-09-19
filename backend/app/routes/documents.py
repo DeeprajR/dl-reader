@@ -216,7 +216,9 @@ async def extract_document(doc_id: str, background_tasks: BackgroundTasks):
     if all(getattr(llm_data, name).value is None for name in CORE_FIELDS):
         warnings.append("No driving licence fields were found. Is this image a driving licence?")
 
-    data, merge_warnings = extraction.merge(llm_data, ocr_result.text, page=doc["page_number"])
+    data, merge_warnings = extraction.merge(
+        llm_data, ocr_result.text, words=ocr_result.words, page=doc["page_number"]
+    )
     result = ExtractionResult(
         doc_id=doc_id, data=data, ocr_text=ocr_result.text, warnings=warnings + merge_warnings
     )

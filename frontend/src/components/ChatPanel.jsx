@@ -4,28 +4,50 @@ import { api } from '../api.js'
 const MAX_CHARS = 1000
 const ORIGIN_LABELS = { ocr_text: 'Document text', extracted_fields: 'Extracted field' }
 
-function Sources({ sources }) {
+// Each source is expandable; expanding one with a bbox highlights it on the document.
+function Sources({ messageId, sources, activeSourceId, onSourceSelect }) {
   if (!sources.length) return null
   return (
-    <details className="group mt-2">
+    <details className="mt-2">
       <summary className="cursor-pointer select-none text-xs font-medium text-blue-700 hover:underline">
         Sources ({sources.length})
       </summary>
       <ol className="mt-2 space-y-2">
-        {sources.map((s, i) => (
-          <li key={i} className="rounded-md bg-white px-3 py-2 text-xs ring-1 ring-slate-200">
-            <span className="mb-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
-              {ORIGIN_LABELS[s.origin] ?? s.origin}
-            </span>
-            <p className="whitespace-pre-line text-slate-700">{s.text}</p>
-          </li>
-        ))}
+        {sources.map((s, i) => {
+          const id = `${messageId}-${i}`
+          const active = id === activeSourceId
+          return (
+            <li key={id}>
+              <details
+                open={active || undefined}
+                onToggle={(e) => {
+                  if (e.currentTarget.open) onSourceSelect({ id, box: s.bbox })
+                  else if (active) onSourceSelect(null)
+                }}
+                className={`rounded-md bg-white text-xs ring-1 ${active ? 'ring-violet-400' : 'ring-slate-200'}`}
+              >
+                <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2">
+                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
+                    {ORIGIN_LABELS[s.origin] ?? s.origin}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-slate-700">{s.text.split('\n')[0]}</span>
+                </summary>
+                <div className="border-t border-slate-100 px-3 py-2">
+                  <p className="whitespace-pre-line text-slate-700">{s.text}</p>
+                  <p className={`mt-1 ${s.bbox ? 'text-violet-700' : 'text-slate-400'}`}>
+                    {s.bbox ? 'Highlighted on the document.' : 'Not located on the image.'}
+                  </p>
+                </div>
+              </details>
+            </li>
+          )
+        })}
       </ol>
     </details>
   )
 }
 
-function Message({ message }) {
+function Message({ message, messageId, activeSourceId, onSourceSelect }) {
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -45,12 +67,18 @@ function Message({ message }) {
   return (
     <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-100 px-4 py-2 text-sm text-slate-900">
       <p className="whitespace-pre-wrap">{message.text}</p>
-      <Sources sources={message.sources} />
+      <Sources
+        messageId={messageId}
+        sources={message.sources}
+        activeSourceId={activeSourceId}
+        onSourceSelect={onSourceSelect}
+      />
     </div>
   )
 }
 
-export default function ChatPanel({ docId }) {
+// onSourceSelect({ id, box } | null) drives the source highlight on the document.
+export default function ChatPanel({ docId, activeSourceId, onSourceSelect }) {
   const [messages, setMessages] = useState([])
   const [question, setQuestion] = useState('')
   const [pending, setPending] = useState(false)
@@ -88,7 +116,7 @@ export default function ChatPanel({ docId }) {
           </div>
         )}
         {messages.map((m, i) => (
-          <Message key={i} message={m} />
+          <Message key={i} messageId={i} message={m} activeSourceId={activeSourceId} onSourceSelect={onSourceSelect} />
         ))}
         {pending && (
           <div className="flex items-center gap-2 text-sm text-slate-500">

@@ -1,13 +1,14 @@
-"""Merge LLM extraction with OCR: date normalisation and confidence flags."""
+"""Merge LLM extraction with OCR: date normalisation, confidence flags and bbox matching."""
 
 import re
 import string
 from datetime import date
 from difflib import SequenceMatcher
 
-from app.schemas import CORE_FIELDS, DATE_FIELDS, FieldValue, LicenceData
+from app.schemas import CORE_FIELDS, DATE_FIELDS, Box, FieldValue, LicenceData
 
 TEXT_MATCH_RATIO = 0.85
+BBOX_MATCH_RATIO = 0.8
 MIN_OCR_CHARS = 20
 LOW_OCR_WARNING = "OCR yielded little text; confidence flags unreliable"
 
@@ -79,22 +80,26 @@ def normalize_date(s: str | None) -> str | None:
 # --- fuzzy matching -------------------------------------------------------------------------
 
 
-def _ratio(a: str, b: str) -> float:
-    return SequenceMatcher(None, a, b, autojunk=False).ratio()
+def _best_window(target: str, units: list[str], n: int) -> tuple[float, int, int]:
+    """Best (score, start, end) over windows of `n` ±1 consecutive units, by difflib ratio.
 
-
-def _best_window(target_tokens: list[str], tokens: list[str]) -> tuple[float, int, int]:
-    """Best (score, start, end) over windows of consecutive tokens, length = target count ±1."""
-    target = " ".join(target_tokens)
-    n = len(target_tokens)
+    Ties keep the earliest window (reading order).
+    """
+    matcher = SequenceMatcher(None, autojunk=False)
+    matcher.set_seq2(target)  # seq2 is cached; only the window changes
     best = (0.0, 0, 0)
-    for size in (n - 1, n, n + 1):
-        if size < 1 or size > len(tokens):
+    for size in (n, n - 1, n + 1):
+        if size < 1 or size > len(units):
             continue
-        for start in range(len(tokens) - size + 1):
-            score = _ratio(" ".join(tokens[start : start + size]), target)
+        for start in range(len(units) - size + 1):
+            matcher.set_seq1(" ".join(units[start : start + size]))
+            if matcher.real_quick_ratio() <= best[0] or matcher.quick_ratio() <= best[0]:
+                continue  # cannot beat the current best
+            score = matcher.ratio()
             if score > best[0]:
                 best = (score, start, start + size)
+                if score == 1.0:
+                    return best
     return best
 
 
@@ -110,8 +115,39 @@ def text_matches_ocr(target: str | None, ocr_text: str, *, is_date: bool = False
         target_digits = digits_only(target)
         if len(target_digits) >= 6 and target_digits in digits_only(ocr_text):
             return True
-    score, _, _ = _best_window(norm_target.split(), norm_ocr.split())
+    tokens = norm_target.split()
+    score, _, _ = _best_window(norm_target, norm_ocr.split(), len(tokens))
     return score >= TEXT_MATCH_RATIO
+
+
+def match_bbox(target: str | None, words: list[dict]) -> Box | None:
+    """Locate `target` in the Tesseract word list; the union box of the best window, or None.
+
+    Windows of consecutive words (target word count ±1) are scored by the difflib ratio of
+    their joined normalised text against the normalised target; below BBOX_MATCH_RATIO there
+    is no box. A window may cross lines, so a multi-line value such as an address gets one
+    box covering all of its lines. Pure function; None simply means "show the snippet only".
+    """
+    norm_target = normalize(target)
+    if not norm_target or not words:
+        return None
+    # Punctuation-only words (":", "-", "|") normalise to nothing: drop them so they neither
+    # count as words nor break a window, on both sides.
+    n = sum(1 for part in (target or "").split() if normalize(part))
+    kept = [(normalize(w["text"]), w) for w in words]
+    kept = [(text, w) for text, w in kept if text]
+    if not kept:
+        return None
+
+    score, start, end = _best_window(norm_target, [text for text, _ in kept], n)
+    if score < BBOX_MATCH_RATIO:
+        return None
+    window = [w for _, w in kept[start:end]]
+    left = min(w["left"] for w in window)
+    top = min(w["top"] for w in window)
+    right = max(w["left"] + w["width"] for w in window)
+    bottom = max(w["top"] + w["height"] for w in window)
+    return Box(x=left, y=top, w=right - left, h=bottom - top)
 
 
 # --- user edits -----------------------------------------------------------------------------
@@ -148,10 +184,12 @@ def iter_fields(data: LicenceData) -> list[tuple[str, FieldValue]]:
     return core + [(f"other_fields.{k}", v) for k, v in data.other_fields.items()]
 
 
-def merge(data: LicenceData, ocr_text: str, page: int = 1) -> tuple[LicenceData, list[str]]:
-    """Set confidence on every field by cross-checking source_text against the OCR text.
+def merge(
+    data: LicenceData, ocr_text: str, words: list[dict] | None = None, page: int = 1
+) -> tuple[LicenceData, list[str]]:
+    """Cross-check every field against OCR: confidence from the text, bbox from word boxes.
 
-    Returns a new LicenceData plus warnings. Null-value fields are always "review".
+    Returns a new LicenceData plus warnings. Null-value fields are always "review" with no box.
     """
     data = data.model_copy(deep=True)
     warnings: list[str] = []
@@ -163,6 +201,7 @@ def merge(data: LicenceData, ocr_text: str, page: int = 1) -> tuple[LicenceData,
         is_date = name in DATE_FIELDS
         field.page = page
         field.confidence = "review"
+        field.bbox = None
 
         if is_date and field.value is not None:
             iso = normalize_date(field.value) or normalize_date(field.source_text)
@@ -171,7 +210,10 @@ def merge(data: LicenceData, ocr_text: str, page: int = 1) -> tuple[LicenceData,
             else:
                 warnings.append(f"{name}: could not normalise the date '{field.value}'")
 
-        if field.value is None or low_ocr:
+        if field.value is None:
+            continue
+        field.bbox = match_bbox(field.source_text or field.value, words or [])
+        if low_ocr:
             continue
         if text_matches_ocr(field.source_text or field.value, ocr_text, is_date=is_date):
             field.confidence = "high"
