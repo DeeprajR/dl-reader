@@ -44,7 +44,7 @@ import app.main  # noqa: E402,F401  loads .env (TESSERACT_CMD, POPPLER_PATH) bef
 from app.schemas import FieldValue, LicenceData  # noqa: E402
 
 # Phase 2 steps that are built; their tests must pass. See module docstring.
-PHASE2_STEPS_DONE: set[int] = {6, 8}
+PHASE2_STEPS_DONE: set[int] = {6, 8, 9}
 FIRST_PHASE2_STEP = 6
 
 
