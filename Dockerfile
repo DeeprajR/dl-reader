@@ -14,6 +14,8 @@ RUN npm run build
 # ---- Stage 2: Python runtime --------------------------------------------------------------
 FROM python:3.11-slim
 
+# HF_HOME / HF_HUB_*: where the chat's search model (all-MiniLM-L6-v2) is stored. The
+# sentence-transformers library downloads it from the Hugging Face model hub, once, below.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -27,7 +29,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tesseract-ocr poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Hugging Face Spaces runs containers as uid 1000.
+# The app runs as an ordinary user, not as root, so a bug in it cannot change the system.
 RUN useradd --create-home --uid 1000 app
 
 WORKDIR /app/backend
