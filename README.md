@@ -123,6 +123,7 @@ Open `.env` in a text editor (`notepad .env` on Windows, `open -e .env` on macOS
 | `LLM_CHAT_MODEL` | Optional different model for the chat |
 | `LLM_MODEL_ALT` | Second model, used only by the comparison script (default `anthropic/claude-sonnet-5`) |
 | `MAX_UPLOAD_MB` | Largest file you can upload (default 10) |
+| `APP_PASSWORD` | Optional password, for when other people can reach the app. Empty means no password |
 | `TESSERACT_CMD`, `POPPLER_PATH` | Where Tesseract and poppler are, if they aren't on your `PATH` (see option B) |
 
 `.env` is never committed, and your key never leaves the server.
@@ -257,6 +258,8 @@ It reads each licence with both `LLM_MODEL` and `LLM_MODEL_ALT`, and prints thei
 
 The Dockerfile builds a single image, about 3 GB, that serves the whole app on port 7860. You can change the port with the `PORT` setting. The first download of the image takes a while; after that the app starts in seconds. The app needs internet access to reach OpenRouter, unless you use Ollama.
 
+If other people can reach the app, set `APP_PASSWORD`. The browser then asks for that password (any username works) before it shows the app, and every request without it is refused.
+
 ---
 
 ## AI/LLM approach
@@ -346,7 +349,7 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 - **Two-sided licences.** Both sides in one image, or a two-page PDF, work. Front and back uploaded as two separate files are treated as two documents, and PDF pages after the second are ignored.
 - **No chat memory.** The chat answers each question on its own, without remembering earlier ones.
 - **Reading time.** Reading a licence takes about 8–15 seconds with the default model.
-- **No login.** Anyone who can open the app can see all uploads, so run it locally.
+- **No user accounts.** The app is open unless `APP_PASSWORD` is set, and that is one shared password: everyone who has it sees all uploads.
 - **No long-term storage with Docker.** Documents are kept inside the container, so each `docker run` starts with an empty list. When run directly on your computer, they stay in `backend/data` and `backend/chroma`.
 
 ---

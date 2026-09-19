@@ -3,8 +3,10 @@
 In the container it also serves the built frontend, so one process runs the whole app.
 """
 
+import base64
 import logging
 import os
+import secrets
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -83,6 +85,7 @@ def startup_checks() -> None:
         logger.critical(message)
         raise RuntimeError(message)
     logger.info("Extraction model: %s | chat model: %s", *models)
+    logger.info("Password protection: %s", "on" if os.getenv("APP_PASSWORD") else "off")
     # A missing Ollama server or model is only a warning: it can be started after the app.
     if any(is_local(m) for m in models):
         check_ollama({m.removeprefix(OLLAMA_PREFIX) for m in models if is_local(m)})
@@ -143,6 +146,38 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     """
     logger.error("Unhandled error on %s %s: %s", request.method, request.url.path, type(exc).__name__)
     return JSONResponse({"error": "An unexpected server error occurred."}, status_code=500)
+
+
+# --- password gate ------------------------------------------------------------------------------
+# For a deployment that anyone can reach. With APP_PASSWORD set, every request (the API, the images
+# and the frontend itself) needs that password; without it the app is open, as on a local run.
+@app.middleware("http")
+async def password_gate(request: Request, call_next):
+    """HTTP Basic: the browser shows its own password box, then sends the password with every request.
+
+    Any username is accepted; only the password is checked.
+    """
+    password = os.getenv("APP_PASSWORD")
+    if not password or _password_matches(request.headers.get("Authorization"), password):
+        return await call_next(request)
+    return JSONResponse(
+        {"error": "Password required."},
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="Licence Reader", charset="UTF-8"'},
+    )
+
+
+def _password_matches(header: str | None, password: str) -> bool:
+    """True when an `Authorization: Basic <base64 of "user:password">` header carries the password."""
+    scheme, _, encoded = (header or "").partition(" ")
+    if scheme.lower() != "basic":
+        return False
+    try:
+        _, _, given = base64.b64decode(encoded, validate=True).decode("utf-8").partition(":")
+    except ValueError:  # not base64, or not text
+        return False
+    # compare_digest takes the same time whether or not the first characters match.
+    return secrets.compare_digest(given.encode(), password.encode())
 
 
 app.include_router(documents.router)

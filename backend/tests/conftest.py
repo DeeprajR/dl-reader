@@ -31,6 +31,7 @@ os.environ["LLM_MODEL"] = "test/fake-vision-model"
 os.environ["LLM_MODEL_ALT"] = "test/fake-alt-model"
 os.environ["LLM_CHAT_MODEL"] = ""
 os.environ["MAX_UPLOAD_MB"] = "10"
+os.environ["APP_PASSWORD"] = ""  # no password gate, whatever the developer's .env says
 
 from PIL import Image  # noqa: E402
 

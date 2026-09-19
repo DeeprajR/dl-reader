@@ -123,6 +123,54 @@ def test_api_key_is_never_logged(client, uploaded, fake_provider, fake_ocr, monk
     assert TEST_API_KEY not in caplog.text
 
 
+TEST_PASSWORD = "correct horse battery staple"
+
+
+def test_app_is_open_without_a_password(client):
+    """With APP_PASSWORD empty (a local run), nothing asks for a password."""
+    assert client.get("/api/documents").status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/api/documents", "/"])
+def test_password_is_required_everywhere_when_set(client, monkeypatch, path):
+    """With APP_PASSWORD set, the API and the frontend both answer 401 and make the browser ask."""
+    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
+    response = client.get(path)
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"].startswith('Basic realm="Licence Reader"')
+    assert response.json() == {"error": "Password required."}
+
+
+@pytest.mark.parametrize(
+    ("auth", "status"),
+    [
+        (("anyone", TEST_PASSWORD), 200),  # any username, the right password
+        (("anyone", "wrong"), 401),
+        (("anyone", ""), 401),
+    ],
+)
+def test_only_the_right_password_is_accepted(client, monkeypatch, auth, status):
+    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
+    assert client.get("/api/documents", auth=auth).status_code == status
+
+
+@pytest.mark.parametrize("header", ["Bearer abc", "Basic not-base64!", "Basic", ""])
+def test_malformed_credentials_are_refused_not_crashed(client, monkeypatch, header):
+    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
+    assert client.get("/api/documents", headers={"Authorization": header}).status_code == 401
+
+
+def test_password_is_never_logged(client, monkeypatch, caplog):
+    """Security: neither startup nor a refused or accepted request writes the password to the log."""
+    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
+    with caplog.at_level(logging.DEBUG):
+        main.startup_checks()
+        client.get("/api/documents")
+        client.get("/api/documents", auth=("anyone", TEST_PASSWORD))
+    assert "Password protection: on" in caplog.text
+    assert TEST_PASSWORD not in caplog.text
+
+
 def test_env_example_lists_every_setting_with_spec_defaults():
     """.env.example lists every setting, with the defaults the specification gives."""
     lines = (REPO_DIR / "backend" / ".env.example").read_text(encoding="utf-8").splitlines()
@@ -133,6 +181,7 @@ def test_env_example_lists_every_setting_with_spec_defaults():
         "LLM_MODEL_ALT": "anthropic/claude-sonnet-5",
         "LLM_CHAT_MODEL": "",
         "MAX_UPLOAD_MB": "10",
+        "APP_PASSWORD": "",
         "TESSERACT_CMD": "",
         "POPPLER_PATH": "",
     }
