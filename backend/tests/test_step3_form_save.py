@@ -67,6 +67,20 @@ def test_save_rejects_bad_other_field_names_and_shapes(client, extracted):
     assert response.json()["error"].startswith("Invalid request")
 
 
+def test_save_keeps_printed_labels_of_other_fields_only(client, extracted):
+    """A printed label is saved (tidied) with an item of other_fields, dropped from a core field, and limited in length."""
+    data = saved_data(client, extracted)
+    data["other_fields"]["blood_group"]["label"] = "  Blood   Group "
+    data["full_name"]["label"] = "Name"
+    saved = client.put(f"/api/documents/{extracted}/data", json=data).json()
+    assert saved["other_fields"]["blood_group"]["label"] == "Blood Group"
+    assert saved["full_name"]["label"] is None
+
+    data["other_fields"]["blood_group"]["label"] = "x" * 65
+    response = client.put(f"/api/documents/{extracted}/data", json=data)
+    assert response.status_code == 422 and "label" in response.json()["error"]
+
+
 def test_save_validates_per_class_dates(client, extracted):
     """Per-class dates such as lmv_valid_till are normalised and validated like the main dates."""
     data = saved_data(client, extracted)
@@ -143,6 +157,8 @@ def test_form_has_exactly_the_nine_required_fields():
         "Issuing Authority",
         "Other relevant information",
     ]
+    # An extra item is shown under its label as printed on the licence, not under a made-up name.
+    assert "field?.label || humanize(key)" in read("src/fields.js")
     # Extra items are not rendered as their own inputs: they are lines of the ninth field.
     form = read("src/components/ExtractedForm.jsx")
     assert "<OtherField" in form and "Other details" not in form

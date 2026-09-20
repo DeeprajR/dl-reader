@@ -156,6 +156,9 @@ def field_chunk(name: str, field: FieldValue) -> str:
     It holds both the cleaned value and the printed text, so either wording of a question finds it.
     """
     key = name.removeprefix("other_fields.")
+    # An item's printed label is added, so a question in the card's own words ("S/D/W of") finds it.
+    if field.label:
+        key = f'{key} (printed as "{field.label}")'
     source = " ".join((field.source_text or "").split())
     return f"Field: {key} = {field.value} (source: '{source}')" if source else f"Field: {key} = {field.value}"
 

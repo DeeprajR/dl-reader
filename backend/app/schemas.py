@@ -39,6 +39,10 @@ class FieldValue(BaseModel):
     # How sure OCR was about the printed words this value was found in: Tesseract's average
     # certainty, 0 to 100. None when the value was not located on the image.
     confidence_score: int | None = None
+    # Items of `other_fields` only: the item's label exactly as printed on the card (for example
+    # "S/D/W of"). The form shows it in place of a name made from the key. None when the card
+    # prints no label for the item.
+    label: str | None = None
 
 
 class LicenceData(BaseModel):

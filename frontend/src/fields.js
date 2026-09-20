@@ -36,9 +36,12 @@ export function fieldDomId(key) {
 // Per-class validity items, e.g. "lmv_date_of_issue" -> "LMV · Date of issue".
 const CLASS_DATE_KEY = /^(.+?)_(date_of_issue|valid_till)$/
 
-export function otherLabel(key) {
+// The name an item is shown under. A per-class date names its class; any other item uses its
+// label exactly as printed on the licence ("S/D/W of"), or a name made from its key if the
+// licence prints none.
+export function otherLabel(key, field) {
   const m = key.match(CLASS_DATE_KEY)
-  if (!m) return humanize(key)
+  if (!m) return field?.label || humanize(key)
   return `${m[1].replace(/_/g, ' ').toUpperCase()} · ${m[2] === 'date_of_issue' ? 'Date of issue' : 'Valid till'}`
 }
 
@@ -53,10 +56,18 @@ function toKey(label) {
 
 // Items of other_fields that have a value, as { key, label, field }.
 export function otherItems(otherFields) {
+  const seen = new Set()
   return Object.entries(otherFields)
     // Items without a value are not shown.
     .filter(([, field]) => field.value != null && field.value !== '')
-    .map(([key, field]) => ({ key, label: otherLabel(key), field }))
+    .map(([key, field]) => {
+      // Two items printed under the same label ("Ref. No." twice): the later one is shown under
+      // its key's name, so every line of the box still belongs to exactly one item.
+      let label = otherLabel(key, field)
+      if (seen.has(label.toLowerCase())) label = humanize(key)
+      seen.add(label.toLowerCase())
+      return { key, label, field }
+    })
 }
 
 // The text shown in the "Other relevant information" field.
@@ -71,8 +82,8 @@ export function composeOther(otherFields) {
 // highlight; new lines become new items; deleted lines are removed. A line without "Label: "
 // is kept under "Additional information".
 export function parseOther(text, previous) {
-  // Look up each existing item by the label it is shown under, e.g. "blood group" -> "blood_group".
-  const byLabel = new Map(Object.keys(previous).map((key) => [otherLabel(key).toLowerCase(), key]))
+  // Look up each existing item by the label it is shown under, e.g. "s/d/w of" -> "relation_name".
+  const byLabel = new Map(otherItems(previous).map(({ key, label }) => [label.toLowerCase(), key]))
   const result = {}
   for (const raw of text.split('\n')) {
     const line = raw.trim()
@@ -87,10 +98,11 @@ export function parseOther(text, previous) {
     if (result[key]) {
       result[key] = { ...result[key], value: `${result[key].value}; ${value}` }
     } else {
-      // An existing item keeps its source and highlight. A new one has none, and starts as "please verify".
+      // An existing item keeps its source and highlight. A new one has none, starts as "please
+      // verify", and keeps the label as the user typed it.
       result[key] = previous[key]
         ? { ...previous[key], value }
-        : { value, source_text: null, confidence: 'review', bbox: null, confidence_score: null }
+        : { value, source_text: null, confidence: 'review', bbox: null, confidence_score: null, label: split > 0 ? label : null }
     }
   }
   return result

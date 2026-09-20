@@ -16,6 +16,7 @@ DEFAULT_MODEL = "google/gemini-3.8-flash"
 # A model name that starts with this runs locally through Ollama, e.g. "ollama/qwen2.5vl:3b".
 OLLAMA_PREFIX = "ollama/"
 MAX_ATTEMPTS = 2  # one retry on failure or invalid JSON
+MAX_LABEL_CHARS = 64  # longest printed label kept for an item of other_fields
 
 # The LLM's instructions for reading a licence, word for word from the specification. Rule 1
 # (copy the printed text) and rule 2 (never guess) are what make the OCR cross-check possible.
@@ -34,6 +35,7 @@ Rules:
 # The user prompt shows the LLM the exact JSON shape to return. It is built from CORE_FIELDS, so
 # the prompt and the data model cannot drift apart.
 _FIELD = '{"value": string | null, "source_text": string | null}'
+_OTHER_FIELD = '{"value": string | null, "source_text": string | null, "label": string | null}'
 # A hint per field: what it is, and the labels it is usually printed under.
 _FIELD_NOTES = {
     "full_name": "holder's full name",
@@ -49,7 +51,11 @@ EXTRACTION_USER_PROMPT = (
     "Extract the driving licence fields from this image. Respond with a JSON object of exactly "
     "this shape:\n{\n"
     + "".join(f'  "{name}": {_FIELD},  // {_FIELD_NOTES[name]}\n' for name in CORE_FIELDS)
-    + f'  "other_fields": {{ "<descriptive_snake_case_key>": {_FIELD}, ... }}\n}}'
+    + f'  "other_fields": {{ "<descriptive_snake_case_key>": {_OTHER_FIELD}, ... }}\n}}'
+    # The form shows other_fields under the card's own wording, not under a name the model made up.
+    + '\nFor every item of other_fields, "label" is the item\'s label exactly as printed on the '
+    'document (e.g. "S/D/W of", "Blood Group", "B.G."), without the value. Set it to null if the '
+    "document prints no label for that item. Never invent or translate a label."
     # The printed label shows which date is which, to the reviewer and in the chat excerpts.
     + "\nFor date_of_birth, date_of_issue and date_of_expiry, source_text is the printed label "
     'together with the date, exactly as printed (e.g. "DOI: 01-02-2020", "Valid Till: '
@@ -101,16 +107,30 @@ def _as_text(v) -> str | None:
     return s or None
 
 
-def _field(raw) -> FieldValue:
-    """One field of the reply as a FieldValue. It always starts as "review" with no box: those are set by the merge."""
+def clean_label(v) -> str | None:
+    """A printed label on one line, without the colon after it: "Blood Group :" -> "Blood Group".
+
+    The form shows an item as "Label: value", so a label must not contain ": " itself.
+    """
+    text = " ".join((_as_text(v) or "").split()).replace(": ", " ").rstrip(" :-")
+    return text[:MAX_LABEL_CHARS].strip() or None
+
+
+def _field(raw, with_label: bool = False) -> FieldValue:
+    """One field of the reply as a FieldValue. It always starts as "review" with no box: those are set by the merge.
+
+    `with_label` is for other_fields, whose items also carry the label printed on the card.
+    """
+    label = None
     if isinstance(raw, dict):
         value, source = _as_text(raw.get("value")), _as_text(raw.get("source_text"))
+        label = clean_label(raw.get("label")) if with_label else None
     else:  # bare value instead of {value, source_text}
         value, source = _as_text(raw), None
-    # A source text without a value is meaningless, so it is dropped.
+    # A source text or a label without a value is meaningless, so it is dropped.
     if value is None:
-        source = None
-    return FieldValue(value=value, source_text=source, confidence="review", bbox=None)
+        source = label = None
+    return FieldValue(value=value, source_text=source, confidence="review", bbox=None, label=label)
 
 
 def parse_licence_json(text: str | None) -> LicenceData:
@@ -137,7 +157,7 @@ def parse_licence_json(text: str | None) -> LicenceData:
         for key, raw in other_raw.items():
             key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
             if key and key not in CORE_FIELDS:
-                other[key] = _field(raw)
+                other[key] = _field(raw, with_label=True)
     # A core field missing from the reply becomes an empty field instead of an error.
     return LicenceData(**{name: _field(obj.get(name)) for name in CORE_FIELDS}, other_fields=other)
 

@@ -158,6 +158,11 @@ def test_field_chunk_format():
     assert rag.field_chunk("full_name", fv("JOHN DOE")) == "Field: full_name = JOHN DOE (source: 'JOHN DOE')"
     assert rag.field_chunk("other_fields.blood_group", fv("O+")) == "Field: blood_group = O+ (source: 'O+')"
     assert rag.field_chunk("address", fv("A, B", "A,\nB")) == "Field: address = A, B (source: 'A, B')"
+    # The printed label is searchable too, so a question in the card's own words finds the item.
+    relation = fv("RAM DOE").model_copy(update={"label": "S/D/W of"})
+    assert rag.field_chunk("other_fields.relation_name", relation) == (
+        "Field: relation_name (printed as \"S/D/W of\") = RAM DOE (source: 'RAM DOE')"
+    )
 
 
 def test_extraction_indexes_ocr_chunks_and_fields(client, extracted):

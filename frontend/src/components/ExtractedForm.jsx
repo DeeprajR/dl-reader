@@ -14,20 +14,22 @@ const STAGES = [
   { at: 9000, text: 'Verifying…' },
 ]
 
-// Below this score (0-100) OCR itself found the print hard to read, so the score is shown in amber.
+// Below this score (0-100) the print was hard to read, so the source line says "review needed".
 const LOW_SCORE = 70
 
-// "· OCR confidence 93%": how sure OCR was about the printed words the value was found in.
+// The end of a source line: "· Confidence 93%", or in amber "· Confidence 55% · review needed".
+// The score says how clearly the printed words this value was found in could be read.
 // Nothing is shown for a value that was not located on the image (score null).
 function ConfidenceScore({ score }) {
   if (score == null) return null
+  const low = score < LOW_SCORE
   return (
     <span
-      className={score < LOW_SCORE ? 'font-medium text-amber-700' : 'text-slate-400'}
-      title="How sure OCR was about the printed words this value was found in"
+      className={low ? 'font-medium text-amber-700' : 'text-slate-400'}
+      title="How clearly the printed text this value was found in could be read"
     >
       {' '}
-      · OCR confidence {score}%
+      · Confidence {score}%{low && ' · review needed'}
     </span>
   )
 }

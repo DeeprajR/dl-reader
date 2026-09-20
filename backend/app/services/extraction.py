@@ -434,6 +434,7 @@ def check_date_order(data: LicenceData) -> list[str]:
 # What the user saves from the form is checked before it is stored.
 
 MAX_VALUE_CHARS = 1000
+MAX_LABEL_CHARS = 64
 # Names allowed for "other" fields: lowercase letters, digits and underscores, at most 64.
 _OTHER_KEY = re.compile(r"[a-z0-9_]{1,64}")
 
@@ -456,6 +457,11 @@ def clean_user_data(data: LicenceData) -> LicenceData:
                 raise ValueError(f"{name} must be a valid date in YYYY-MM-DD format")
             value = iso
         field.value = value
+        # Only an item of other_fields that has a value keeps its printed label.
+        label = " ".join((field.label or "").split()) or None
+        if label and len(label) > MAX_LABEL_CHARS:
+            raise ValueError(f"The label of {name} is longer than {MAX_LABEL_CHARS} characters")
+        field.label = label if value and name.startswith("other_fields.") else None
     return data
 
 

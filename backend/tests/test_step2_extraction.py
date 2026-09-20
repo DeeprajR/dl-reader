@@ -176,6 +176,33 @@ def test_parse_normalizes_loose_shapes():
     assert data.other_fields["state"].value == "Pune"
 
 
+def test_parse_keeps_the_printed_label_of_other_fields():
+    """An item of other_fields keeps its label as printed on the card, tidied to fit a "Label: value" line."""
+    reply = licence_json(
+        full_name={"value": "JOHN DOE", "source_text": "JOHN DOE", "label": "Name"},  # core fields have fixed labels
+        other_fields={
+            "relation_name": {"value": "RAM DOE", "source_text": "S/D/W of: RAM DOE", "label": " S/D/W  of : "},
+            "blood_group": {"value": "O+", "source_text": "O+", "label": None},
+            "state": {"value": None, "source_text": None, "label": "State"},  # no value, so no label
+            "ref": {"value": "1", "source_text": "1", "label": "Ref: No " + "x" * 80},
+        },
+    )
+    data = parse_licence_json(reply)
+    assert data.full_name.label is None
+    assert data.other_fields["relation_name"].label == "S/D/W of"
+    assert data.other_fields["blood_group"].label is None
+    assert data.other_fields["state"].label is None
+    assert ": " not in data.other_fields["ref"].label and len(data.other_fields["ref"].label) <= 64
+
+
+def test_prompt_asks_for_the_printed_label_of_other_fields():
+    """The prompt asks for each extra item's label exactly as printed, and never an invented one."""
+    from app.services.providers.base import EXTRACTION_USER_PROMPT
+
+    assert '"label": string | null' in EXTRACTION_USER_PROMPT
+    assert "exactly as printed" in EXTRACTION_USER_PROMPT and "Never invent or translate a label" in EXTRACTION_USER_PROMPT
+
+
 def test_parse_missing_fields_become_null():
     """A field missing from the reply becomes an empty field, not an error."""
     data = parse_licence_json('{"full_name": {"value": "A", "source_text": "A"}}')
