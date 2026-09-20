@@ -14,7 +14,7 @@ The form has nine fields: Full Name, Driving Licence Number, Date of Birth, Date
 | Reading printed text (OCR) | Tesseract |
 | Understanding the licence | A vision AI model through OpenRouter (default `google/gemini-3.8-flash`), or a local model through Ollama |
 | PDF support | poppler, via pdf2image |
-| Chat search | sentence-transformers embeddings stored in ChromaDB |
+| Chat search | sentence-transformers model (all-MiniLM-L6-v2) are used to store the  embeddings in ChromaDB |
 | Storage | SQLite, plus files on disk |
 | Frontend | React 18, Vite, Tailwind CSS |
 | Tests | pytest |
@@ -476,4 +476,4 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 
 ## AI development tools used
 
-- **Claude Code**, using **Claude Opus 5** and **Claude Fable 5.1**. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.
+- **Claude Code** models **Claude Opus 5** for development and **Claude Fable 5.1** for review are used via VS code. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.

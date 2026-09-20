@@ -3,7 +3,7 @@
 **/.env
 
 # Documents and runtime data contain PII
-samples
+samples/*
 data
 chroma
 backend/data
