@@ -149,47 +149,107 @@ def test_api_key_is_never_logged(client, uploaded, fake_provider, fake_ocr, monk
 TEST_PASSWORD = "correct horse battery staple"
 
 
+@pytest.fixture
+def locked(client, monkeypatch):
+    """The app with a password set, and no waiting after a wrong one."""
+    from app import auth
+
+    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
+    monkeypatch.setattr(auth, "WRONG_PASSWORD_DELAY", 0)
+    return client
+
+
 def test_app_is_open_without_a_password(client):
     """With APP_PASSWORD empty (a local run), nothing asks for a password."""
     assert client.get("/api/documents").status_code == 200
 
 
-@pytest.mark.parametrize("path", ["/api/documents", "/"])
-def test_password_is_required_everywhere_when_set(client, monkeypatch, path):
-    """With APP_PASSWORD set, the API and the frontend both answer 401 and make the browser ask."""
+def test_signed_out_visitors_are_sent_to_the_sign_in_page(locked):
+    """Without a sign-in the API answers 401 and a page request goes to the sign-in page.
+
+    No WWW-Authenticate header is sent, so the browser never shows its own box with a user name.
+    """
+    response = locked.get("/api/documents")
+    assert response.status_code == 401 and response.json() == {"error": "Password required."}
+    assert "www-authenticate" not in response.headers
+
+    page = locked.get("/", follow_redirects=False)
+    assert page.status_code == 303 and page.headers["location"] == "/api/login"
+
+
+def test_sign_in_page_asks_for_a_password_only(locked):
+    page = locked.get("/api/login")
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    assert page.text.count("<input") == 1 and 'type="password"' in page.text
+    assert "username" not in page.text.lower()
+
+
+def test_signing_in_with_the_password_opens_the_app(locked):
+    """A wrong password is refused; the right one sets a cookie that opens the API and the page."""
+    wrong = locked.post("/api/login", json={"password": "wrong"})
+    assert wrong.status_code == 401 and wrong.json() == {"error": "Wrong password."}
+    assert locked.get("/api/documents").status_code == 401
+
+    right = locked.post("/api/login", json={"password": TEST_PASSWORD})
+    assert right.status_code == 200
+    cookie = right.headers["set-cookie"]
+    assert "HttpOnly" in cookie and "SameSite=strict" in cookie
+    assert TEST_PASSWORD not in cookie  # the cookie is a fingerprint, not the password
+    assert locked.get("/api/documents").status_code == 200  # the client sends the cookie back
+
+
+def test_sign_in_cookie_is_secure_over_https(locked):
+    """Behind an HTTPS front end (Cloud Run) the cookie is only ever sent over HTTPS."""
+    response = locked.post("/api/login", json={"password": TEST_PASSWORD}, headers={"X-Forwarded-Proto": "https"})
+    assert "Secure" in response.headers["set-cookie"]
+
+
+def test_changing_the_password_signs_everyone_out(locked, monkeypatch):
+    locked.post("/api/login", json={"password": TEST_PASSWORD})
+    assert locked.get("/api/documents").status_code == 200
+    monkeypatch.setenv("APP_PASSWORD", "a different password")
+    assert locked.get("/api/documents").status_code == 401
+
+
+def test_a_wrong_password_is_answered_slowly(client, monkeypatch):
+    """Every wrong password waits before it is answered, which makes guessing slow."""
+    import asyncio
+
+    from app import auth
+
+    waits = []
+
+    async def fake_sleep(seconds):
+        waits.append(seconds)
+
     monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
-    response = client.get(path)
-    assert response.status_code == 401
-    assert response.headers["www-authenticate"].startswith('Basic realm="Licence Reader"')
-    assert response.json() == {"error": "Password required."}
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    client.post("/api/login", json={"password": "guess"})
+    assert waits == [auth.WRONG_PASSWORD_DELAY] and auth.WRONG_PASSWORD_DELAY >= 1
 
 
 @pytest.mark.parametrize(
-    ("auth", "status"),
+    ("header", "status"),
     [
-        (("anyone", TEST_PASSWORD), 200),  # any username, the right password
-        (("anyone", "wrong"), 401),
-        (("anyone", ""), 401),
+        ("Basic " + __import__("base64").b64encode(f"x:{TEST_PASSWORD}".encode()).decode(), 200),  # scripts and curl
+        ("Basic " + __import__("base64").b64encode(b"x:wrong").decode(), 401),
+        ("Bearer abc", 401),
+        ("Basic not-base64!", 401),
+        ("Basic", 401),
     ],
 )
-def test_only_the_right_password_is_accepted(client, monkeypatch, auth, status):
-    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
-    assert client.get("/api/documents", auth=auth).status_code == status
+def test_scripts_can_send_the_password_in_a_header(locked, header, status):
+    """A Basic header with the right password is accepted; anything malformed is refused, not a crash."""
+    assert locked.get("/api/documents", headers={"Authorization": header}).status_code == status
 
 
-@pytest.mark.parametrize("header", ["Bearer abc", "Basic not-base64!", "Basic", ""])
-def test_malformed_credentials_are_refused_not_crashed(client, monkeypatch, header):
-    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
-    assert client.get("/api/documents", headers={"Authorization": header}).status_code == 401
-
-
-def test_password_is_never_logged(client, monkeypatch, caplog):
-    """Security: neither startup nor a refused or accepted request writes the password to the log."""
-    monkeypatch.setenv("APP_PASSWORD", TEST_PASSWORD)
+def test_password_is_never_logged(locked, caplog):
+    """Security: neither startup nor a refused or accepted sign-in writes the password to the log."""
     with caplog.at_level(logging.DEBUG):
         main.startup_checks()
-        client.get("/api/documents")
-        client.get("/api/documents", auth=("anyone", TEST_PASSWORD))
+        locked.post("/api/login", json={"password": "wrong"})
+        locked.post("/api/login", json={"password": TEST_PASSWORD})
+        locked.get("/api/documents")
     assert "Password protection: on" in caplog.text
     assert TEST_PASSWORD not in caplog.text
 

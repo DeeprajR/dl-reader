@@ -26,6 +26,8 @@ async function request(path, options = {}) {
   } catch {
     body = null
   }
+  // 401: the app has a password and this browser is not signed in (or no longer is).
+  if (res.status === 401) window.location.assign('/api/login')
   // The backend sends every error as {"error": "message"}.
   if (!res.ok) {
     throw new ApiError(body?.error || `Request failed (HTTP ${res.status}).`, res.status)

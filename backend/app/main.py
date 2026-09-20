@@ -3,10 +3,8 @@
 In the container it also serves the built frontend, so one process runs the whole app.
 """
 
-import base64
 import logging
 import os
-import secrets
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,6 +25,7 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
+from app import auth  # noqa: E402
 from app.routes import chat, documents  # noqa: E402
 import httpx  # noqa: E402
 
@@ -148,38 +147,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse({"error": "An unexpected server error occurred."}, status_code=500)
 
 
-# --- password gate ------------------------------------------------------------------------------
-# For a deployment that anyone can reach. With APP_PASSWORD set, every request (the API, the images
-# and the frontend itself) needs that password; without it the app is open, as on a local run.
-@app.middleware("http")
-async def password_gate(request: Request, call_next):
-    """HTTP Basic: the browser shows its own password box, then sends the password with every request.
+# The optional password (APP_PASSWORD) is checked before anything else. See app/auth.py.
+app.middleware("http")(auth.password_gate)
 
-    Any username is accepted; only the password is checked.
-    """
-    password = os.getenv("APP_PASSWORD")
-    if not password or _password_matches(request.headers.get("Authorization"), password):
-        return await call_next(request)
-    return JSONResponse(
-        {"error": "Password required."},
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="Licence Reader", charset="UTF-8"'},
-    )
-
-
-def _password_matches(header: str | None, password: str) -> bool:
-    """True when an `Authorization: Basic <base64 of "user:password">` header carries the password."""
-    scheme, _, encoded = (header or "").partition(" ")
-    if scheme.lower() != "basic":
-        return False
-    try:
-        _, _, given = base64.b64decode(encoded, validate=True).decode("utf-8").partition(":")
-    except ValueError:  # not base64, or not text
-        return False
-    # compare_digest takes the same time whether or not the first characters match.
-    return secrets.compare_digest(given.encode(), password.encode())
-
-
+app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
 

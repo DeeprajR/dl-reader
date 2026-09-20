@@ -258,7 +258,7 @@ It reads each licence with both `LLM_MODEL` and `LLM_MODEL_ALT`, and prints thei
 
 The Dockerfile builds a single image, about 3 GB, that serves the whole app on port 7860. You can change the port with the `PORT` setting. The first download of the image takes a while; after that the app starts in seconds. The app needs internet access to reach OpenRouter, unless you use Ollama.
 
-If other people can reach the app, set `APP_PASSWORD`. The browser then asks for that password (any username works) before it shows the app, and every request without it is refused.
+If other people can reach the app, set `APP_PASSWORD`. The app then shows a sign-in page that asks for that password (there are no user names), and every request without it is refused. The browser stays signed in for 7 days; changing the password signs everyone out.
 
 #### Google Cloud Run (free)
 

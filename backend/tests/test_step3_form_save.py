@@ -121,6 +121,7 @@ def read(path):
 def test_frontend_uses_relative_api_base_and_dev_proxy():
     """The frontend always calls /api, so the same code works with the dev server and in Docker."""
     assert "const API = '/api'" in read("src/api.js")  # same code in dev and in the container
+    assert "res.status === 401" in read("src/api.js") and "/api/login" in read("src/api.js")  # signed out -> sign-in page
     config = read("vite.config.js")
     assert "'/api'" in config and "8000" in config
 
