@@ -90,9 +90,9 @@ def make_licence(**overrides) -> LicenceData:
     fields = dict(
         full_name=fv("JOHN DOE"),
         licence_number=fv("MH12 20190001234"),
-        date_of_birth=fv("1990-08-12", "12-08-1990"),
-        date_of_issue=fv("2019-06-16", "16-06-2019"),
-        date_of_expiry=fv("2034-06-15", "15-06-2034"),
+        date_of_birth=fv("12-08-1990", "12-08-1990"),
+        date_of_issue=fv("16-06-2019", "16-06-2019"),
+        date_of_expiry=fv("15-06-2034", "15-06-2034"),
         address=fv("12 High Street, Pune", "12 High Street,\nPune"),
         vehicle_classes=fv("LMV, MCWG"),
         issuing_authority=fv("RTO, Pune"),

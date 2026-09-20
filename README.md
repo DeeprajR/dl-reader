@@ -59,7 +59,7 @@ flowchart TD
 
 1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name.
 2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify. Each field's source line also shows a **confidence score** (0–100%): how clearly the printed text it was found in could be read. A low score adds "review needed".
-3. **Review.** Edit and save the form. Dates are shown and typed day first (DD-MM-YYYY), and stored as YYYY-MM-DD. Click a field to see it on the document, or click a highlight to jump to its field.
+3. **Review.** Edit and save the form. Dates are written day first (DD-MM-YYYY) everywhere: in the form, in storage and in the chat. Click a field to see it on the document, or click a highlight to jump to its field.
 4. **Chat.** Each answer is built only from text found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
 
 | API endpoint | What it does |

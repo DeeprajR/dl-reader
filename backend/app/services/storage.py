@@ -9,6 +9,7 @@ had. That way a crafted file name can never reach the file system.
 """
 
 import json
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -51,6 +52,35 @@ def init(data_dir: Path | str | None = None) -> None:
         for unused in ("page_number", "page_offsets"):  # columns that were stored but never read
             if unused in columns:
                 conn.execute(f"ALTER TABLE documents DROP COLUMN {unused}")
+        _dates_day_first(conn)
+
+
+# A date stored by an older version, year first: 2034-06-15.
+_YEAR_FIRST = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+def _day_first(m: re.Match) -> str:
+    """The matched year-first date, day first."""
+    return f"{m[3]}-{m[2]}-{m[1]}"
+
+
+def _dates_day_first(conn) -> None:
+    """Rewrite dates saved by an older version (2034-06-15) in the app's format (15-06-2034).
+
+    Only field values and the form's warnings are touched; the text printed on the card is not.
+    """
+    for row in conn.execute("SELECT doc_id, extraction FROM documents WHERE extraction IS NOT NULL").fetchall():
+        result = json.loads(row["extraction"])
+        data = result.get("data", {})
+        fields = [v for v in data.values() if isinstance(v, dict) and "value" in v]
+        fields += list(data.get("other_fields", {}).values())
+        for field in fields:
+            if isinstance(field.get("value"), str) and (m := _YEAR_FIRST.fullmatch(field["value"])):
+                field["value"] = _day_first(m)
+        result["warnings"] = [_YEAR_FIRST.sub(_day_first, w) for w in result.get("warnings", [])]
+        updated = json.dumps(result)
+        if updated != row["extraction"]:
+            conn.execute("UPDATE documents SET extraction = ? WHERE doc_id = ?", (updated, row["doc_id"]))
 
 
 def uploads_dir() -> Path:

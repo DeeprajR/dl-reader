@@ -29,7 +29,7 @@ def test_save_persists_edits_across_reopen(client, extracted):
     assert response.status_code == 200, response.text
     returned = response.json()
     assert returned["issuing_authority"]["value"] == "RTO, Pune (verified)"
-    assert returned["date_of_issue"]["value"] == "2019-06-16"
+    assert returned["date_of_issue"]["value"] == "16-06-2019"
     assert returned["address"]["value"] is None
 
     reopened = saved_data(client, extracted)
@@ -67,15 +67,15 @@ def test_save_rejects_bad_other_field_names_and_shapes(client, extracted):
     assert response.json()["error"].startswith("Invalid request")
 
 
-def test_dates_are_shown_day_first_and_stored_as_iso(client, extracted):
-    """The form shows and accepts DD-MM-YYYY; the backend stores YYYY-MM-DD, so the date checks and the chat keep working."""
+def test_dates_are_day_first_everywhere(client, extracted):
+    """DD-MM-YYYY is the one date format: stored, returned and shown as it is, with nothing converted in the browser."""
     data = saved_data(client, extracted)
-    data["date_of_expiry"]["value"] = "15-06-2034"  # as the form sends it
-    assert client.put(f"/api/documents/{extracted}/data", json=data).json()["date_of_expiry"]["value"] == "2034-06-15"
+    assert data["date_of_expiry"]["value"] == "15-06-2034"
+    data["date_of_expiry"]["value"] = "2034-06-14"  # a year-first date is still read, and stored day first
+    assert client.put(f"/api/documents/{extracted}/data", json=data).json()["date_of_expiry"]["value"] == "14-06-2034"
 
     form = read("src/components/ExtractedForm.jsx")
-    assert "showDates(result.data)" in form and "showDates(result)" in form and "'DD-MM-YYYY'" in form
-    assert "'YYYY-MM-DD'" not in form  # the old placeholder
+    assert "'DD-MM-YYYY'" in form and "YYYY-MM-DD" not in form + read("src/fields.js")
 
 
 def test_save_keeps_printed_labels_of_other_fields_only(client, extracted):
@@ -96,7 +96,7 @@ def test_save_validates_per_class_dates(client, extracted):
     """Per-class dates such as lmv_valid_till are normalised and validated like the main dates."""
     data = saved_data(client, extracted)
     data["other_fields"]["lmv_valid_till"] = {**data["other_fields"]["blood_group"], "value": "15/06/2034"}
-    assert client.put(f"/api/documents/{extracted}/data", json=data).json()["other_fields"]["lmv_valid_till"]["value"] == "2034-06-15"
+    assert client.put(f"/api/documents/{extracted}/data", json=data).json()["other_fields"]["lmv_valid_till"]["value"] == "15-06-2034"
 
     data["other_fields"]["lmv_valid_till"]["value"] = "someday"
     response = client.put(f"/api/documents/{extracted}/data", json=data)

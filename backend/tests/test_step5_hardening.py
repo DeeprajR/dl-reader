@@ -77,6 +77,29 @@ def test_database_from_an_older_version_is_cleaned_up(tmp_path):
     assert "page_number" not in doc and "page_offsets" not in doc
 
 
+def test_dates_saved_by_an_older_version_become_day_first(client, extracted):
+    """A document saved with year-first dates is rewritten as DD-MM-YYYY at start-up; printed text is left alone."""
+    import json
+    import sqlite3
+
+    db = storage._data_dir / "app.db"
+    conn = sqlite3.connect(db)
+    result = json.loads(conn.execute("SELECT extraction FROM documents").fetchone()[0])
+    result["data"]["date_of_expiry"]["value"] = "2034-06-15"
+    result["data"]["other_fields"]["lmv_valid_till"] = {**result["data"]["date_of_expiry"], "source_text": "LMV 2019-06-16"}
+    result["warnings"] = ["Date of issue (2099-01-01) is in the future."]
+    conn.execute("UPDATE documents SET extraction = ?", (json.dumps(result),))
+    conn.commit()
+    conn.close()
+
+    storage.init()
+    stored = client.get(f"/api/documents/{extracted}/extract").json()
+    assert stored["data"]["date_of_expiry"]["value"] == "15-06-2034"
+    assert stored["data"]["other_fields"]["lmv_valid_till"]["value"] == "15-06-2034"
+    assert stored["data"]["other_fields"]["lmv_valid_till"]["source_text"] == "LMV 2019-06-16"
+    assert stored["warnings"] == ["Date of issue (01-01-2099) is in the future."]
+
+
 def test_no_cors_headers_are_sent(client):
     """The frontend is always served from the API's own address, so no other site is allowed in."""
     response = client.get("/api/documents", headers={"Origin": "http://localhost:5173"})

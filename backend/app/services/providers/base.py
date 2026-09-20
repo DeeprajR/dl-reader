@@ -18,7 +18,8 @@ OLLAMA_PREFIX = "ollama/"
 MAX_ATTEMPTS = 2  # one retry on failure or invalid JSON
 MAX_LABEL_CHARS = 64  # longest printed label kept for an item of other_fields
 
-# The LLM's instructions for reading a licence, word for word from the specification. Rule 1
+# The LLM's instructions for reading a licence, from the specification (which asked for
+# YYYY-MM-DD in rule 3; the app's date format is DD-MM-YYYY). Rule 1
 # (copy the printed text) and rule 2 (never guess) are what make the OCR cross-check possible.
 EXTRACTION_SYSTEM_PROMPT = """
 You are a precise document data extraction system. You will receive an image of a driving licence.
@@ -26,7 +27,7 @@ Extract ONLY information that is actually visible in the image.
 Rules:
 1. For every field, also return source_text: the exact verbatim text as printed on the document that you used for that value.
 2. If a field is not visible or not present, set value and source_text to null. NEVER guess, infer, or fabricate. A wrong licence number is worse than a null.
-3. Normalize dates in "value" to YYYY-MM-DD but keep source_text exactly as printed.
+3. Normalize dates in "value" to DD-MM-YYYY but keep source_text exactly as printed.
 4. licence_number: preserve exact characters, spacing and case as printed.
 5. Put any additional identifiable fields (blood group, relation name, reference numbers, state, country) into other_fields with descriptive snake_case keys.
 6. Respond with ONLY a JSON object matching the provided schema. No prose, no markdown fences.
@@ -40,9 +41,9 @@ _OTHER_FIELD = '{"value": string | null, "source_text": string | null, "label": 
 _FIELD_NOTES = {
     "full_name": "holder's full name",
     "licence_number": "driving licence number",
-    "date_of_birth": "value as YYYY-MM-DD; printed as e.g. DOB / Date of Birth",
-    "date_of_issue": "value as YYYY-MM-DD; printed as e.g. DOI / Date of Issue / Issued on",
-    "date_of_expiry": "value as YYYY-MM-DD; printed as e.g. Valid Till / Validity / Valid Upto / Expiry",
+    "date_of_birth": "value as DD-MM-YYYY; printed as e.g. DOB / Date of Birth",
+    "date_of_issue": "value as DD-MM-YYYY; printed as e.g. DOI / Date of Issue / Issued on",
+    "date_of_expiry": "value as DD-MM-YYYY; printed as e.g. Valid Till / Validity / Valid Upto / Expiry",
     "address": "full address, may span several lines",
     "vehicle_classes": "authorised vehicle classes, comma-joined if multiple",
     "issuing_authority": "issuing authority / office",
@@ -64,7 +65,7 @@ EXTRACTION_USER_PROMPT = (
     + "\nIf the licence prints validity per vehicle class (for example a table of class, issue "
     "date and valid-till date), add two other_fields for every class: "
     '"<class>_date_of_issue" and "<class>_valid_till", with the class code in snake_case '
-    "(e.g. lmv_date_of_issue, mcwg_valid_till). Value: that date as YYYY-MM-DD. source_text: "
+    "(e.g. lmv_date_of_issue, mcwg_valid_till). Value: that date as DD-MM-YYYY. source_text: "
     'that class\'s table row exactly as printed (e.g. "LMV 01-02-2020 31-01-2040"). Omit them '
     "if no such table is printed."
 )

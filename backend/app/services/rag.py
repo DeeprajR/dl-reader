@@ -17,7 +17,7 @@ from chromadb.errors import NotFoundError
 
 from app.schemas import Box, ChatResponse, ChatSource, ExtractionResult, FieldValue
 from app.services import storage
-from app.services.extraction import as_date, class_date_key, iter_fields, match_bbox, normalize
+from app.services.extraction import as_date, class_date_key, iter_fields, match_bbox, normalize, show_date
 from app.services.providers import ollama
 from app.services.providers.base import OLLAMA_PREFIX, ProviderError, chat_model, is_local
 from app.services.providers.openrouter import complete, openrouter_client
@@ -39,14 +39,15 @@ MAX_DISTANCE = 0.9
 REFUSAL = "The document does not contain this information."
 
 # The LLM's instructions for the chat. Rules 1-3 are the specification's, word for word.
-# Rule 4 was added for date questions (see `date_facts`).
+# Rule 4 keeps answers in the app's date format; rule 5 was added for date questions (see `date_facts`).
 CHAT_SYSTEM_PROMPT = """
 You answer questions about a driving licence using ONLY the provided document excerpts.
 Rules:
 1. If the answer is present, answer concisely and quote the exact supporting text.
 2. If the answer is NOT in the excerpts, reply exactly: "The document does not contain this information." Do not use outside knowledge about licence formats.
 3. Never speculate, estimate, or fill gaps.
-4. An excerpt marked (calculated) holds date arithmetic the application worked out from the document's dates and today's date. For questions about days left, validity today, age or years held, use its numbers exactly as given, never calculate yourself, and also quote the printed date it is based on.
+4. Dates in the excerpts are written day first, DD-MM-YYYY. Write dates the same way.
+5. An excerpt marked (calculated) holds date arithmetic the application worked out from the document's dates and today's date. For questions about days left, validity today, age or years held, use its numbers exactly as given, never calculate yourself, and also quote the printed date it is based on.
 """.strip()
 
 # Shared state, created on first use. Requests are handled by several threads, so every piece
@@ -151,7 +152,7 @@ def chunk_ocr_text(text: str, size: int = CHUNK_CHARS) -> list[str]:
 
 def field_chunk(name: str, field: FieldValue) -> str:
     """The search text for one form field, for example
-    "Field: date_of_expiry = 2034-06-15 (source: 'Valid Till: 15-06-2034')".
+    "Field: date_of_expiry = 15-06-2034 (source: 'Valid Till: 15-06-2034')".
 
     It holds both the cleaned value and the printed text, so either wording of a question finds it.
     """
@@ -210,10 +211,10 @@ def _validity(label: str, field: FieldValue, until: date, today: date) -> str:
     """One sentence saying when something expires, and whether that is ahead, today or in the past."""
     left = (until - today).days
     if left < 0:
-        return f"{label} expired on {until}{_printed(field)}, {_days(-left)} ago (no longer valid today)."
+        return f"{label} expired on {show_date(until)}{_printed(field)}, {_days(-left)} ago (no longer valid today)."
     if left == 0:
-        return f"{label} expires today, {until}{_printed(field)}."
-    return f"{label} expires on {until}{_printed(field)}, {_days(left)} from today (still valid today)."
+        return f"{label} expires today, {show_date(until)}{_printed(field)}."
+    return f"{label} expires on {show_date(until)}{_printed(field)}, {_days(left)} from today (still valid today)."
 
 
 def date_facts(data, today: date) -> str | None:
@@ -228,11 +229,11 @@ def date_facts(data, today: date) -> str | None:
     # Dates in the future are skipped: an age or a time held cannot be negative.
     if (birth := as_date(data.date_of_birth)) and birth <= today:
         age = _years_between(birth, today)
-        facts.append(f"The holder was born on {birth}{_printed(data.date_of_birth)} and is {age} years old today.")
+        facts.append(f"The holder was born on {show_date(birth)}{_printed(data.date_of_birth)} and is {age} years old today.")
     if (issue := as_date(data.date_of_issue)) and issue <= today:
         held = (today - issue).days
         facts.append(
-            f"The licence was issued on {issue}{_printed(data.date_of_issue)}, {_days(held)} ago "
+            f"The licence was issued on {show_date(issue)}{_printed(data.date_of_issue)}, {_days(held)} ago "
             f"({_years_between(issue, today)} full years)."
         )
     # Each vehicle class has its own valid-till date.
@@ -241,7 +242,7 @@ def date_facts(data, today: date) -> str | None:
             facts.append(_validity(f"Vehicle class {m['cls'].upper().replace('_', ' ')}", field, till, today))
     if not facts:
         return None
-    return f"Calculated on {today} (today) from the licence dates: " + " ".join(facts)
+    return f"Calculated on {show_date(today)} (today) from the licence dates: " + " ".join(facts)
 
 
 # Questions about time: the only ones that get the calculated excerpt, so it is not listed as a

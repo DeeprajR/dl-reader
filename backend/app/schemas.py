@@ -53,7 +53,7 @@ class LicenceData(BaseModel):
 
     full_name: FieldValue
     licence_number: FieldValue
-    # Dates are stored as YYYY-MM-DD in `value`; `source_text` keeps the printed form
+    # Dates are stored day first, as DD-MM-YYYY, in `value`; `source_text` keeps the printed form
     # (for example "15-06-2034").
     date_of_birth: FieldValue
     date_of_issue: FieldValue
@@ -91,7 +91,7 @@ CORE_FIELDS: tuple[str, ...] = (
     "issuing_authority",
 )
 
-# The core fields that hold a date, and are therefore normalised to YYYY-MM-DD.
+# The core fields that hold a date, and are therefore normalised to DD-MM-YYYY.
 DATE_FIELDS: frozenset[str] = frozenset({"date_of_birth", "date_of_issue", "date_of_expiry"})
 
 

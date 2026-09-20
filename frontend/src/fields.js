@@ -45,32 +45,6 @@ export function otherLabel(key, field) {
   return `${m[1].replace(/_/g, ' ').toUpperCase()} · ${m[2] === 'date_of_issue' ? 'Date of issue' : 'Valid till'}`
 }
 
-// Dates are stored as YYYY-MM-DD and shown day first: "2034-06-15" -> "15-06-2034". Text in any
-// other shape (something the user is typing, or null) is returned as it is.
-export function showDate(value) {
-  const m = typeof value === 'string' && value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : value
-}
-
-// The same for dates inside a sentence, such as a warning: "(2034-06-15)" -> "(15-06-2034)".
-export function showDatesInText(text) {
-  return text.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3-$2-$1')
-}
-
-// A copy of LicenceData with every date shown day first: the three date fields, and each
-// vehicle class's own dates. The backend reads day-first dates, and stores them as YYYY-MM-DD
-// again when the form is saved.
-export function showDates(data) {
-  const shown = { ...data, other_fields: { ...data.other_fields } }
-  for (const f of CORE_FIELDS) {
-    if (f.kind === 'date') shown[f.name] = { ...data[f.name], value: showDate(data[f.name].value) }
-  }
-  for (const [key, field] of Object.entries(data.other_fields)) {
-    if (CLASS_DATE_KEY.test(key)) shown.other_fields[key] = { ...field, value: showDate(field.value) }
-  }
-  return shown
-}
-
 // Label -> backend key; reverses otherLabel/humanize ("LMV · Date of issue" -> "lmv_date_of_issue").
 function toKey(label) {
   return label

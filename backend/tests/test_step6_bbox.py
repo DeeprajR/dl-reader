@@ -160,9 +160,9 @@ def test_per_class_dates_are_anchored_on_their_own_row():
     from app.services.extraction import merge
 
     other = {
-        "mcwg_valid_till": fv("2034-06-15", "MCWG 16-06-2019 15-06-2034"),
-        "mcwg_date_of_issue": fv("2030-01-01", "MCWG 16-06-2019 15-06-2034"),  # not printed on its row
-        "lmv_valid_till": fv("2034-06-15", "LMV 16-06-2019 15-06-2034"),  # LMV cell unreadable
+        "mcwg_valid_till": fv("15-06-2034", "MCWG 16-06-2019 15-06-2034"),
+        "mcwg_date_of_issue": fv("01-01-2030", "MCWG 16-06-2019 15-06-2034"),  # not printed on its row
+        "lmv_valid_till": fv("15-06-2034", "LMV 16-06-2019 15-06-2034"),  # LMV cell unreadable
     }
     merged, _ = merge(make_licence(other_fields=other), "\n".join(TABLE_LINES), words=TABLE_WORDS)
     mcwg, wrong, lmv = (merged.other_fields[k] for k in other)
@@ -308,7 +308,7 @@ def test_side_by_side_cards_do_not_mix_rows():
 
     front = words_from_lines(["DOB : 03-09-1992"], x0=20, y0=250)
     back = words_from_lines(["MCWG 18-01-2017 17-01-2037"], x0=900, y0=246)  # same height, other card
-    other = {"mcwg_date_of_issue": fv("2017-01-18", "MCWG 18-01-2017 17-01-2037")}
+    other = {"mcwg_date_of_issue": fv("18-01-2017", "MCWG 18-01-2017 17-01-2037")}
     merged, _ = merge(make_licence(other_fields=other), "DOB : 03-09-1992 MCWG 18-01-2017 17-01-2037", words=front + back)
     field = merged.other_fields["mcwg_date_of_issue"]
     assert field.confidence == "high"

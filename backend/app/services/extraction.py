@@ -6,7 +6,7 @@ module decides, field by field:
   * confidence - "high" when OCR also read that text, otherwise "review" ("Please verify")
   * bbox       - where the text is on the image, from OCR's word positions, for the highlight
   * score      - how sure OCR was about the printed words the value was found in (0-100)
-  * dates      - normalised to YYYY-MM-DD, and checked for an impossible order
+  * dates      - normalised to DD-MM-YYYY, and checked for an impossible order
 
 Everything here is pure logic on text and numbers: no files, no network, no AI calls.
 """
@@ -80,18 +80,29 @@ def _year(y: str) -> int:
     return 2000 + yy if 2000 + yy <= date.today().year + 20 else 1900 + yy
 
 
-def _build(y: int, m: int | None, d: int) -> str | None:
-    """YYYY-MM-DD for a real calendar date, or None (unknown month, 31 February, ...)."""
+def _build(y: int, m: int | None, d: int) -> date | None:
+    """A real calendar date, or None (unknown month, 31 February, ...)."""
     if m is None:
         return None
     try:
-        return date(y, m, d).isoformat()
+        return date(y, m, d)
     except ValueError:
         return None
 
 
+def show_date(d: date) -> str:
+    """The app's one date format, day first: 15-06-2034."""
+    return f"{d.day:02d}-{d.month:02d}-{d.year:04d}"
+
+
 def normalize_date(s: str | None) -> str | None:
-    """Parse a printed date into YYYY-MM-DD (day-first for numeric dates). Unparseable -> None."""
+    """A printed or typed date as DD-MM-YYYY (numeric dates are read day first). Unparseable -> None."""
+    d = parse_date(s)
+    return show_date(d) if d else None
+
+
+def parse_date(s: str | None) -> date | None:
+    """A printed or typed date as a `date`, in any supported format. Unparseable -> None."""
     if not s:
         return None
     # Uppercase, commas removed, single spaces: "16 jun, 2019" -> "16 JUN 2019".
@@ -124,16 +135,16 @@ _DATE_IN_TEXT = re.compile(
 
 
 def find_date(text: str | None) -> str | None:
-    """First date found inside `text` (e.g. "DOI: 16-06-2019" -> "2019-06-16"), or None."""
+    """First date found inside `text`, as DD-MM-YYYY (e.g. "DOI: 16 Jun 2019" -> "16-06-2019"), or None."""
     if not text:
         return None
     # The text may be nothing but a date.
-    if iso := normalize_date(text):
-        return iso
+    if found := normalize_date(text):
+        return found
     # Otherwise look for a date inside it, skipping look-alikes that are not real dates.
     for m in _DATE_IN_TEXT.finditer(text):
-        if iso := normalize_date(m.group()):
-            return iso
+        if found := normalize_date(m.group()):
+            return found
     return None
 
 
@@ -376,11 +387,8 @@ def _class_row(field: FieldValue, words: list[dict]) -> tuple[list[dict], bool]:
 
 
 def as_date(field: FieldValue | None) -> date | None:
-    """The field's value as a `date`, or None when it is empty or not a valid YYYY-MM-DD."""
-    try:
-        return date.fromisoformat(field.value) if field and field.value else None
-    except ValueError:
-        return None
+    """The field's value as a `date`, or None when it is empty or not a valid date."""
+    return parse_date(field.value) if field else None
 
 
 def check_date_order(data: LicenceData) -> list[str]:
@@ -399,13 +407,17 @@ def check_date_order(data: LicenceData) -> list[str]:
     dob, doi, doe = data.date_of_birth, data.date_of_issue, data.date_of_expiry
     birth, issue, expiry = as_date(dob), as_date(doi), as_date(doe)
     if birth and birth > today:
-        flag(f"Date of birth ({birth}) is in the future.", dob)
+        flag(f"Date of birth ({show_date(birth)}) is in the future.", dob)
     if issue and issue > today:
-        flag(f"Date of issue ({issue}) is in the future.", doi)
+        flag(f"Date of issue ({show_date(issue)}) is in the future.", doi)
     if issue and expiry and issue >= expiry:
-        flag(f"Date of issue ({issue}) is not before the expiry date ({expiry}). Were they swapped?", doi, doe)
+        flag(
+            f"Date of issue ({show_date(issue)}) is not before the expiry date ({show_date(expiry)}). Were they swapped?",
+            doi,
+            doe,
+        )
     if birth and issue and birth >= issue:
-        flag(f"Date of birth ({birth}) is not before the date of issue ({issue}).", dob, doi)
+        flag(f"Date of birth ({show_date(birth)}) is not before the date of issue ({show_date(issue)}).", dob, doi)
 
     # Group the per-class fields by class: {"lmv": {"date_of_issue": ..., "valid_till": ...}}.
     per_class: dict[str, dict[str, FieldValue]] = {}
@@ -418,15 +430,20 @@ def check_date_order(data: LicenceData) -> list[str]:
         cls_issue, cls_till = pair.get("date_of_issue"), pair.get("valid_till")
         start, end = as_date(cls_issue), as_date(cls_till)
         if start and start > today:
-            flag(f"{label} date of issue ({start}) is in the future.", cls_issue)
+            flag(f"{label} date of issue ({show_date(start)}) is in the future.", cls_issue)
         if start and end and start >= end:
             flag(
-                f"{label} date of issue ({start}) is not before its valid-till date ({end}). Were they swapped?",
+                f"{label} date of issue ({show_date(start)}) is not before its valid-till date "
+                f"({show_date(end)}). Were they swapped?",
                 cls_issue,
                 cls_till,
             )
         if birth and start and birth >= start:
-            flag(f"Date of birth ({birth}) is not before the {label} date of issue ({start}).", dob, cls_issue)
+            flag(
+                f"Date of birth ({show_date(birth)}) is not before the {label} date of issue ({show_date(start)}).",
+                dob,
+                cls_issue,
+            )
     return warnings
 
 
@@ -450,12 +467,12 @@ def clean_user_data(data: LicenceData) -> LicenceData:
         value = (field.value or "").strip() or None
         if value and len(value) > MAX_VALUE_CHARS:
             raise ValueError(f"{name} is longer than {MAX_VALUE_CHARS} characters")
-        # Dates may be typed in any supported format. They are stored as YYYY-MM-DD.
+        # Dates may be typed in any supported format. They are stored as DD-MM-YYYY.
         if value and (name in DATE_FIELDS or class_date_key(name)):
-            iso = normalize_date(value)
-            if iso is None:
+            tidy = normalize_date(value)
+            if tidy is None:
                 raise ValueError(f"{name} must be a valid date, for example 15-06-2034")
-            value = iso
+            value = tidy
         field.value = value
         # Only an item of other_fields that has a value keeps its printed label.
         label = " ".join((field.label or "").split()) or None
@@ -497,13 +514,13 @@ def merge(data: LicenceData, ocr_text: str, words: list[dict] | None = None) -> 
         field.bbox = None
         field.confidence_score = None
 
-        # Step 1: normalise dates to YYYY-MM-DD.
+        # Step 1: normalise dates to DD-MM-YYYY.
         if is_date and field.value is not None:
             # source_text may carry the printed label ("DOI: 16-06-2019"); a per-class row
             # holds two dates, so only the value itself is trusted there.
-            iso = find_date(field.value) or (None if per_class else find_date(field.source_text))
-            if iso:
-                field.value = iso
+            found = find_date(field.value) or (None if per_class else find_date(field.source_text))
+            if found:
+                field.value = found
             else:
                 warnings.append(f"{name}: could not normalise the date '{field.value}'")
 

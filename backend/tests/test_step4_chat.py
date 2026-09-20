@@ -211,12 +211,12 @@ def test_class_validity_summary_chunk():
     from conftest import fv, make_licence
 
     data = make_licence(other_fields={
-        "lmv_date_of_issue": fv("2019-06-16"), "lmv_valid_till": fv("2034-06-15"),
-        "lmv_tr_valid_till": fv("2021-03-11"), "blood_group": fv("O+"),
+        "lmv_date_of_issue": fv("16-06-2019"), "lmv_valid_till": fv("15-06-2034"),
+        "lmv_tr_valid_till": fv("11-03-2021"), "blood_group": fv("O+"),
     })
     assert rag.class_validity_chunk(data) == (
-        "Vehicle class validity (all classes): LMV: issued 2019-06-16, valid till 2034-06-15; "
-        "LMV TR: issued not printed, valid till 2021-03-11"
+        "Vehicle class validity (all classes): LMV: issued 16-06-2019, valid till 15-06-2034; "
+        "LMV TR: issued not printed, valid till 11-03-2021"
     )
     assert rag.class_validity_chunk(make_licence()) is None  # no per-class fields, no summary
 
@@ -227,10 +227,10 @@ def test_summary_chunk_is_indexed_only_when_classes_have_dates(client, extracted
     assert not any(d.startswith("Vehicle class validity") for d in documents)  # canned licence has none
 
     data = client.get(f"/api/documents/{extracted}/extract").json()["data"]
-    data["other_fields"]["mcwg_valid_till"] = {**data["other_fields"]["blood_group"], "value": "2035-06-04"}
+    data["other_fields"]["mcwg_valid_till"] = {**data["other_fields"]["blood_group"], "value": "04-06-2035"}
     client.put(f"/api/documents/{extracted}/data", json=data)
     documents = rag._chroma().get_collection(f"doc_{extracted}").get()["documents"]
-    assert "Vehicle class validity (all classes): MCWG: issued not printed, valid till 2035-06-04" in documents
+    assert "Vehicle class validity (all classes): MCWG: issued not printed, valid till 04-06-2035" in documents
 
 
 # --- date answers: arithmetic done by the app, not the LLM -------------------------------------
@@ -242,18 +242,18 @@ def test_date_facts_are_calculated_from_the_form_dates():
 
     from conftest import fv, make_licence
 
-    data = make_licence(other_fields={"lmv_valid_till": fv("2034-06-15"), "lmv_tr_valid_till": fv("2021-03-11")})
+    data = make_licence(other_fields={"lmv_valid_till": fv("15-06-2034"), "lmv_tr_valid_till": fv("11-03-2021")})
     facts = rag.date_facts(data, date(2026, 9, 20))
-    assert facts.startswith("Calculated on 2026-09-20 (today) from the licence dates: ")
+    assert facts.startswith("Calculated on 20-09-2026 (today) from the licence dates: ")
     # each fact keeps the text printed on the card, so the answer can still quote it
-    assert "The licence expires on 2034-06-15 (printed: '15-06-2034'), 2825 days from today (still valid today)." in facts
-    assert "The holder was born on 1990-08-12 (printed: '12-08-1990') and is 36 years old today." in facts
-    assert "The licence was issued on 2019-06-16 (printed: '16-06-2019'), 2653 days ago (7 full years)." in facts
-    assert "Vehicle class LMV expires on 2034-06-15 (printed: '2034-06-15'), 2825 days from today" in facts
-    assert "Vehicle class LMV TR expired on 2021-03-11 (printed: '2021-03-11'), 2019 days ago (no longer valid today)." in facts
+    assert "The licence expires on 15-06-2034 (printed: '15-06-2034'), 2825 days from today (still valid today)." in facts
+    assert "The holder was born on 12-08-1990 (printed: '12-08-1990') and is 36 years old today." in facts
+    assert "The licence was issued on 16-06-2019 (printed: '16-06-2019'), 2653 days ago (7 full years)." in facts
+    assert "Vehicle class LMV expires on 15-06-2034 (printed: '15-06-2034'), 2825 days from today" in facts
+    assert "Vehicle class LMV TR expired on 11-03-2021 (printed: '11-03-2021'), 2019 days ago (no longer valid today)." in facts
 
-    assert "The licence expires today, 2034-06-15 (printed: '15-06-2034')." in rag.date_facts(data, date(2034, 6, 15))
-    assert "expired on 2034-06-15 (printed: '15-06-2034'), 1 day ago" in rag.date_facts(data, date(2034, 6, 16))
+    assert "The licence expires today, 15-06-2034 (printed: '15-06-2034')." in rag.date_facts(data, date(2034, 6, 15))
+    assert "expired on 15-06-2034 (printed: '15-06-2034'), 1 day ago" in rag.date_facts(data, date(2034, 6, 16))
     # the birthday has not come round yet this year
     assert "is 35 years old today" in rag.date_facts(data, date(2026, 8, 11))
 
@@ -270,7 +270,7 @@ def test_days_until_expiry_is_answered_from_the_calculated_excerpt(client, extra
     )
     assert response.status_code == 200
     user = received[0][1]["content"]
-    assert "(calculated) Calculated on 2026-09-20 (today)" in user
+    assert "(calculated) Calculated on 20-09-2026 (today)" in user
     assert "2825 days from today" in user
     calculated = [s for s in response.json()["sources"] if s["origin"] == "calculated"]
     assert len(calculated) == 1
@@ -278,8 +278,9 @@ def test_days_until_expiry_is_answered_from_the_calculated_excerpt(client, extra
     expiry = client.get(f"/api/documents/{extracted}/extract").json()["data"]["date_of_expiry"]
     assert calculated[0]["bbox"] == expiry["bbox"]
 
-    # rules 1-3 are the spec's, word for word; rule 4 only adds the calculated excerpt
-    assert "3. Never speculate, estimate, or fill gaps.\n4. An excerpt marked (calculated)" in rag.CHAT_SYSTEM_PROMPT
+    # rules 1-3 are the spec's, word for word; rule 4 sets the date format, rule 5 adds the calculated excerpt
+    assert "3. Never speculate, estimate, or fill gaps.\n4. Dates in the excerpts are written day first" in rag.CHAT_SYSTEM_PROMPT
+    assert "\n5. An excerpt marked (calculated)" in rag.CHAT_SYSTEM_PROMPT
 
 
 def test_other_questions_do_not_get_the_calculated_excerpt(client, extracted, monkeypatch):

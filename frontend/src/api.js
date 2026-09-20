@@ -38,7 +38,8 @@ function json(method, body) {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
 }
 
-// YYYY-MM-DD in the user's own time zone (toISOString would give the UTC date).
+// Today's date in the user's own time zone (toISOString would give the UTC date). It is sent as
+// YYYY-MM-DD because that is the form every JSON API reads a date in; it is never shown.
 function localDate() {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, '0')

@@ -47,20 +47,21 @@ def confidences(data):
 def test_normalize_dates():
     """Spec test 1."""
     for printed in ("15/01/2020", "15-01-2020", "15 JAN 2020"):
-        assert normalize_date(printed) == "2020-01-15"
+        assert normalize_date(printed) == "15-01-2020"
     assert normalize_date("garbage") is None
 
 
 @pytest.mark.parametrize(
     "printed, iso",
     [
-        ("2020-01-15", "2020-01-15"),
-        ("15.01.2020", "2020-01-15"),
-        ("15-Jan-2020", "2020-01-15"),
-        ("15 January 2020", "2020-01-15"),
-        ("January 15, 2020", "2020-01-15"),
-        ("15/01/20", "2020-01-15"),
-        ("12-08-1990", "1990-08-12"),
+        ("2020-01-15", "15-01-2020"),  # year first is still read
+        ("15-01-2020", "15-01-2020"),
+        ("15.01.2020", "15-01-2020"),
+        ("15-Jan-2020", "15-01-2020"),
+        ("15 January 2020", "15-01-2020"),
+        ("January 15, 2020", "15-01-2020"),
+        ("15/01/20", "15-01-2020"),
+        ("12-08-1990", "12-08-1990"),
         ("31/02/2020", None),  # impossible date
         ("15 MAYBE 2020", None),
         ("", None),
@@ -68,7 +69,7 @@ def test_normalize_dates():
     ],
 )
 def test_normalize_date_formats(printed, iso):
-    """Every supported printed format becomes YYYY-MM-DD, and anything that is not a real date becomes None."""
+    """Every supported printed format becomes DD-MM-YYYY, and anything that is not a real date becomes None."""
     assert normalize_date(printed) == iso
 
 
@@ -110,10 +111,10 @@ def test_merge_matches_dates_by_digits():
 
 
 def test_merge_normalizes_date_values_and_warns_on_garbage():
-    """Dates are stored as YYYY-MM-DD with the printed form kept, and an unreadable date adds a warning."""
+    """Dates are stored as DD-MM-YYYY with the printed form kept, and an unreadable date adds a warning."""
     data = make_licence(date_of_issue=fv("16-06-2019"), date_of_birth=fv("sometime", "sometime"))
     merged, warnings = merge(data, CANNED_OCR_TEXT)
-    assert merged.date_of_issue.value == "2019-06-16"
+    assert merged.date_of_issue.value == "16-06-2019"
     assert merged.date_of_issue.source_text == "16-06-2019"  # printed form kept
     assert any("date_of_birth" in w for w in warnings)
 
@@ -332,7 +333,7 @@ def test_extract_endpoint(client, uploaded, fake_provider, fake_ocr):
     assert result.ocr_text == CANNED_OCR_TEXT
     assert result.warnings == []
     assert set(confidences(result.data).values()) == {"high"}
-    assert result.data.date_of_birth.value == "1990-08-12"
+    assert result.data.date_of_birth.value == "12-08-1990"
     assert len(fake_provider.calls) == 1 and fake_provider.calls[0][1] == "image/png"
 
 
@@ -460,11 +461,11 @@ def test_prompt_asks_for_separate_per_class_dates_only_when_printed():
 @pytest.mark.parametrize(
     "text, iso",
     [
-        ("DOI: 16-06-2019", "2019-06-16"),
-        ("Valid Till: 15-06-2034 (NT)", "2034-06-15"),
-        ("Date of Issue : 10-04-2018", "2018-04-10"),
-        (":12-08-1990", "1990-08-12"),
-        ("Issued on 5 Jan 2021", "2021-01-05"),
+        ("DOI: 16-06-2019", "16-06-2019"),
+        ("Valid Till: 15-06-2034 (NT)", "15-06-2034"),
+        ("Date of Issue : 10-04-2018", "10-04-2018"),
+        (":12-08-1990", "12-08-1990"),
+        ("Issued on 5 Jan 2021", "05-01-2021"),
         ("no date here", None),
         (None, None),
     ],
@@ -479,12 +480,12 @@ def test_find_date_reads_dates_inside_labelled_text(text, iso):
 def test_merge_accepts_labelled_date_sources():
     """A source text that includes its label is still confirmed, and can rescue a value the model garbled."""
     data = make_licence(
-        date_of_issue=fv("2019-06-16", "DOI : 16-06-2019"),
+        date_of_issue=fv("16-06-2019", "DOI : 16-06-2019"),
         date_of_expiry=fv("not a date", "Valid Till : 15-06-2034"),  # value recovered from the source
     )
     merged, warnings = merge(data, CANNED_OCR_TEXT)
     assert merged.date_of_issue.confidence == "high"
-    assert merged.date_of_expiry.value == "2034-06-15"
+    assert merged.date_of_expiry.value == "15-06-2034"
     assert warnings == []
 
 
@@ -493,7 +494,7 @@ def test_merge_accepts_labelled_date_sources():
 
 def test_swapped_issue_and_expiry_are_flagged():
     """Issue and expiry swapped: both are printed on the card, so only the order check can catch it."""
-    data = make_licence(date_of_issue=fv("2034-06-15", "15-06-2034"), date_of_expiry=fv("2019-06-16", "16-06-2019"))
+    data = make_licence(date_of_issue=fv("15-06-2034", "15-06-2034"), date_of_expiry=fv("16-06-2019", "16-06-2019"))
     merged, warnings = merge(data, CANNED_OCR_TEXT)
     assert merged.date_of_issue.confidence == merged.date_of_expiry.confidence == "review"
     assert any("Were they swapped?" in w for w in warnings)
@@ -502,12 +503,12 @@ def test_swapped_issue_and_expiry_are_flagged():
 
 def test_birth_after_issue_and_future_issue_are_flagged():
     """A birth date after the issue date, or an issue date in the future, is sent back for review."""
-    data = make_licence(date_of_birth=fv("2020-01-01", "01-01-2020"))
+    data = make_licence(date_of_birth=fv("01-01-2020", "01-01-2020"))
     merged, warnings = merge(data, CANNED_OCR_TEXT)
     assert merged.date_of_birth.confidence == merged.date_of_issue.confidence == "review"
     assert any("not before the date of issue" in w for w in warnings)
 
-    merged, warnings = merge(make_licence(date_of_issue=fv("2099-01-01")), CANNED_OCR_TEXT)
+    merged, warnings = merge(make_licence(date_of_issue=fv("01-01-2099")), CANNED_OCR_TEXT)
     assert any("in the future" in w for w in warnings)
     assert merged.date_of_issue.confidence == "review"
 
@@ -516,12 +517,12 @@ def test_per_class_dates_are_normalised_and_order_checked():
     """Each vehicle class's dates get the same treatment, and a warning names the class it is about."""
     other = {
         "lmv_date_of_issue": fv("16-06-2019", "LMV 16-06-2019 15-06-2034"),
-        "lmv_valid_till": fv("2034-06-15", "LMV 16-06-2019 15-06-2034"),
-        "mcwg_date_of_issue": fv("2034-06-15", "MCWG 16-06-2019 15-06-2034"),  # swapped
-        "mcwg_valid_till": fv("2019-06-16", "MCWG 16-06-2019 15-06-2034"),
+        "lmv_valid_till": fv("15-06-2034", "LMV 16-06-2019 15-06-2034"),
+        "mcwg_date_of_issue": fv("15-06-2034", "MCWG 16-06-2019 15-06-2034"),  # swapped
+        "mcwg_valid_till": fv("16-06-2019", "MCWG 16-06-2019 15-06-2034"),
     }
     merged, warnings = merge(make_licence(other_fields=other), CANNED_OCR_TEXT)
-    assert merged.other_fields["lmv_date_of_issue"].value == "2019-06-16"
+    assert merged.other_fields["lmv_date_of_issue"].value == "16-06-2019"
     assert any(w.startswith("MCWG date of issue") and "swapped" in w for w in warnings)
     assert not any(w.startswith("LMV") for w in warnings)
     assert merged.other_fields["mcwg_date_of_issue"].confidence == "review"
