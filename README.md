@@ -312,6 +312,25 @@ The last command prints the app's link.
 - The bucket holds the uploads and the database, so the document list survives sleeps and new versions. The chat's search index is not stored: it is rebuilt from the saved data the first time a document is asked about, which makes that first answer slower.
 - To be safe, set a budget alert in Google Cloud and a credit limit on the OpenRouter key.
 
+#### What it costs
+
+The AI model is the main cost, about half a US cent per licence. Google's hosting is free at demo use. These figures are estimates from list prices, not bills.
+
+| Action | What it uses | Approx. cost |
+|---|---|---|
+| Reading one licence | About 3,000 input and 1,000 output tokens with `google/gemini-3.8-flash` ($0.75 / $3.75 per million) | $0.006 |
+| One chat question | About 1,200 input and 100 output tokens | $0.0013 |
+| Cloud Run time for one licence | About 17 seconds of 1 CPU and 2 GB (about $0.10 per active hour) | $0.0005, only after the free 50 hours |
+| Storing one licence | About 1.5 MB in the bucket ($0.022 per GB a month, after 5 GB free) | $0.00003 a month |
+
+| Usage in a month | AI model (OpenRouter) | Google Cloud | Total |
+|---|---|---|---|
+| Demo: 50 licences, 150 questions | $0.50 | $0, plus about $0.07 for storing the app image | under $1 |
+| Small: 1,000 licences, 3,000 questions | $10 | $0 (about 7 of the 50 free hours) | about $10 |
+| Busy: 10,000 licences, 30,000 questions | $100 | about $3 | about $105 |
+
+Nothing is charged while nobody uses the app. The busy row is about the limit of one instance: more would need a real database in place of the file in the bucket.
+
 ---
 
 ## AI/LLM approach
