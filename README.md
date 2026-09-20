@@ -260,6 +260,42 @@ The Dockerfile builds a single image, about 3 GB, that serves the whole app on p
 
 If other people can reach the app, set `APP_PASSWORD`. The browser then asks for that password (any username works) before it shows the app, and every request without it is refused.
 
+#### Google Cloud Run (free)
+
+The app is deployed on Google Cloud Run. It runs the same Docker image, sleeps when nobody uses it, and its monthly free allowance covers about 50 hours of active use at 2 GB of memory. The first visit after a sleep takes about 30 seconds. Uploads are kept in memory, so they are gone when the app sleeps.
+
+You need a Google Cloud project with billing enabled (a card is required, even for free use), the [gcloud tool](https://cloud.google.com/sdk/docs/install) (`winget install Google.CloudSDK` on Windows), and Docker running. Replace `PROJECT` with your project ID. On Windows, run these in Git Bash.
+
+```bash
+gcloud auth login
+gcloud config set project PROJECT
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+
+# 1. Upload the image
+gcloud artifacts repositories create licence-reader --repository-format=docker --location=us-central1
+gcloud auth configure-docker us-central1-docker.pkg.dev
+docker build -t us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1 .
+docker push us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1
+
+# 2. Store the key and the password as secrets (printf adds no line break at the end)
+printf 'YOUR_OPENROUTER_KEY' | gcloud secrets create openrouter-api-key --data-file=-
+printf 'A_LONG_PASSWORD' | gcloud secrets create app-password --data-file=-
+
+# 3. Let Cloud Run read them. NUMBER is your project number: gcloud projects describe PROJECT
+for s in openrouter-api-key app-password; do
+  gcloud secrets add-iam-policy-binding $s --role=roles/secretmanager.secretAccessor \
+    --member=serviceAccount:NUMBER-compute@developer.gserviceaccount.com
+done
+
+# 4. Deploy
+gcloud run deploy licence-reader --region us-central1 --allow-unauthenticated \
+  --image us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1 \
+  --memory 2Gi --cpu 1 --cpu-boost --min-instances 0 --max-instances 1 --timeout 300 \
+  --set-secrets OPENROUTER_API_KEY=openrouter-api-key:latest,APP_PASSWORD=app-password:latest
+```
+
+The last command prints the app's link. `--allow-unauthenticated` only lets visitors reach the app; its own password still protects it. `--max-instances 1` keeps all documents in one place and caps the cost. To be safe, also set a budget alert in Google Cloud and a credit limit on the OpenRouter key.
+
 ---
 
 ## AI/LLM approach
@@ -318,6 +354,7 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 - **SQLite and plain files for storage.** A licence reader for one user needs no database server. Everything lives in two folders, which also makes the Docker image self-contained.
 - **React, Vite and Tailwind for the frontend.** The interface is a single page with three linked parts (document, form, chat) that update each other, which React handles well. Vite makes changes appear instantly while developing, and Tailwind keeps the styling in the components. Next.js was not needed: there is nothing to render on a server.
 - **One Docker image.** Node builds the frontend, then a slim Python image runs the backend with Tesseract, poppler and the search model already inside. One `docker run` starts everything, the same way on every machine.
+- **Google Cloud Run for hosting.** The app needs about 1 GB of memory, which rules out the usual free hosts (Render and Koyeb give 512 MB). Hugging Face Docker Spaces now need a paid plan, and Fly.io has no free tier. Cloud Run runs the same image, gives enough memory within its free allowance, and costs nothing while the app sleeps.
 
 ### AI model
 
