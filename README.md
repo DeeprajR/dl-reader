@@ -19,6 +19,7 @@ The form has nine fields: Full Name, Driving Licence Number, Date of Birth, Date
 | Frontend | React 18, Vite, Tailwind CSS |
 | Tests | pytest |
 | Packaging | Docker |
+| Hosting | Google Cloud Run, with a Cloud Storage bucket for the uploads |
 
 ---
 
@@ -57,20 +58,22 @@ flowchart TD
 
 **How it works**
 
-1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name.
+1. **Upload.** The file's type, content and size (up to 10 MB) are checked, and the file is stored under a random name. For a PDF, the first two pages (front and back) are used.
 2. **Extract.** OCR and the AI model read the document at the same time. For each value, the AI also returns the exact text it copied from the card, and that text is compared with what OCR read. Fields that match are confirmed; the rest are marked Please verify. Each field's source line also shows a **confidence score** (0–100%): how clearly the printed text it was found in could be read. A low score adds "review needed".
 3. **Review.** Edit and save the form. Dates are written day first (DD-MM-YYYY) everywhere: in the form, in storage and in the chat. Click a field to see it on the document, or click a highlight to jump to its field.
-4. **Chat.** Each answer is built only from text found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
+4. **Chat.** Each answer is built only from passages found in the document, and lists them as sources. Questions that need today's date ("how many days until it expires?", "is it still valid?") are answered too: the app works out the numbers from the dates on the card.
 
 | API endpoint | What it does |
 |---|---|
 | `GET /api/documents` | List uploaded documents |
 | `POST /api/documents` | Upload a document |
 | `GET /api/documents/{id}/image` | The document image |
+| `GET /api/documents/{id}/meta` | The image's size, used to place the highlights |
 | `POST /api/documents/{id}/extract` | Read the document and fill the form |
 | `GET /api/documents/{id}/extract` | The saved form, so reopening doesn't re-read the document |
 | `PUT /api/documents/{id}/data` | Save your edits |
 | `POST /api/documents/{id}/chat` | Ask a question |
+| `GET /api/login`, `POST /api/login` | The sign-in page and the sign-in itself. Only used when `APP_PASSWORD` is set |
 
 ---
 
@@ -218,7 +221,7 @@ npm install                          # once
 npm run dev
 ```
 
-Open <http://localhost:5173>. Both terminals must stay open while you use the app. Press **Ctrl+C** in each one to stop it. The first chat question downloads a small search model (about 90 MB), so it takes a little longer.
+Open <http://localhost:5173>. Both terminals must stay open while you use the app. Press **Ctrl+C** in each one to stop it. The first time the backend starts, it downloads a small search model (about 90 MB) in the background, so the first chat question may take a little longer.
 
 Next time, run the same commands but skip the lines marked `once`.
 
@@ -228,7 +231,7 @@ Next time, run the same commands but skip the lines marked `once`.
 pytest
 ```
 
-The tests don't call the AI model or the internet, and take about 15 seconds.
+The tests don't call the AI model or the internet, and take about 20 seconds.
 
 ### Optional: run the AI model on your own computer (Ollama)
 
@@ -269,7 +272,7 @@ You need a Google Cloud project with billing enabled (a card is required, even f
 ```bash
 gcloud auth login
 gcloud config set project PROJECT
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com storage.googleapis.com
 
 # 1. Upload the image
 gcloud artifacts repositories create licence-reader --repository-format=docker --location=us-central1
@@ -382,7 +385,7 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 
 - **Python and FastAPI for the backend.** The app has to wait on two slow things at once (OCR and the AI model), and FastAPI is built for that. It also validates every request and response, and serves the built frontend in the container, so one process runs the whole app. Flask would have needed extra pieces for each of these; Django is far more than a small API needs.
 - **Tesseract for OCR.** It runs on your computer for free, and it returns the position of every word, which is what the highlights are built from. Cloud OCR services (Google Vision, AWS Textract) are more accurate but cost money per page and send the licence to another company. EasyOCR and PaddleOCR need a GPU to be usably fast.
-- **poppler for PDFs.** Licences often arrive as scanned PDFs. poppler turns the pages into images so the rest of the app only ever handles images. (optional additional)
+- **poppler for PDFs.** Licences often arrive as scanned PDFs. poppler turns the pages into images so the rest of the app only ever handles images.
 - **A vision AI model through OpenRouter.** OpenRouter offers models from many vendors through one API, so the model is a setting (`LLM_MODEL`), not code. Using a vendor's own SDK would have tied the app to that vendor.
 - **Ollama as a local alternative.** Same setting, different value (`ollama/...`), and the documents never leave the computer. It's optional because local models are slower, resource intensive and less accurate.
 - **sentence-transformers and ChromaDB for the chat search.** The search model (`all-MiniLM-L6-v2`) is 90 MB and runs locally, so searching costs nothing and sends nothing anywhere. ChromaDB stores the results in a folder, with no server to run. Hosted alternatives (OpenAI embeddings, Pinecone) would add cost and another place the licence data goes.
@@ -420,13 +423,57 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 - **Personal data (PII).** With the default setup, images and chat questions are sent through OpenRouter to the AI provider. OpenRouter's zero-data-retention setting is enabled on the account. For fully local processing, use Ollama; OCR and chat search always run locally.
 - **Two-sided licences.** Both sides in one image, or a two-page PDF, work. Front and back uploaded as two separate files are treated as two documents, and PDF pages after the second are ignored.
 - **No chat memory.** The chat answers each question on its own, without remembering earlier ones.
-- **Reading time.** Reading a licence takes about 8–15 seconds with the default model.
+- **Reading time.** Reading a licence takes about 8–15 seconds on your computer with the default model, and up to 20 seconds on Cloud Run.
 - **No user accounts.** The app is open unless `APP_PASSWORD` is set, and that is one shared password: everyone who has it sees all uploads.
 - **No long-term storage with Docker.** Documents are kept inside the container, so each `docker run` starts with an empty list. When run directly on your computer, they stay in `backend/data` and `backend/chroma`. On Cloud Run they are kept in a storage bucket.
 - **Documents can't be deleted in the app.** There is no delete button. Locally, delete the `backend/data` and `backend/chroma` folders; on Cloud Run, empty the bucket.
 
 ---
 
+## Security
+
+**Uploads**
+- Only JPG, PNG and PDF files are accepted. The file's content must match its extension, so a renamed file is refused, and the file must really open as an image or PDF.
+- The 10 MB limit is applied while the file is being received, so an oversized file is never held in memory.
+- Files are stored under a random id, never under the name the user's file had. Every document id in a request must be a valid id before anything is looked up.
+
+**Input limits**
+- Chat questions and form values are limited to 1,000 characters, and dates must be real dates.
+- User text is never put into a database command directly.
+
+**Secrets**
+- The OpenRouter key stays on the server; the browser only talks to the app's own `/api`.
+- `.env`, `samples/`, `data/` and `chroma/` are kept out of git and out of the Docker image. A test fails if an image, PDF, database or `.env` file is ever committed.
+- Tests check that the key and the password never appear in the logs.
+- On Cloud Run the key and the password are kept in Secret Manager, not in the image.
+
+**Personal data**
+- An unexpected error shows a generic message. Only the kind of error is logged, never its text, because that text could contain details from a licence.
+- OCR and the chat search run inside the app. Only the image and the chat excerpts go to the AI provider, with OpenRouter's zero-data-retention setting enabled. With Ollama, nothing leaves the computer.
+- The Cloud Storage bucket is private: public access is blocked, and only the app can read it.
+
+**Access**
+- With `APP_PASSWORD` set, everything needs the password: the page, the images, the API and its documentation.
+- The sign-in cookie holds a fingerprint of the password, not the password. Page scripts can't read it, other websites can't send it, and over HTTPS it is never sent unencrypted. Changing the password signs everyone out.
+- Every wrong password is answered after a one-second wait, which makes guessing slow.
+- Other websites can't call the API from a visitor's browser, because the app is only ever used from its own address.
+
+**AI**
+- The AI must copy the text it used, and a value that OCR can't confirm is marked Please verify. A made-up value can never show as confirmed.
+- The chat refuses a question before the AI is asked when nothing in the document fits it, and date arithmetic is done in code.
+
+**Running**
+- The container runs as an ordinary user, not as root, and package versions are fixed.
+- On Cloud Run there is at most one running copy, and every request has a time limit.
+
+**Not covered**
+- There are no user accounts and no record of who did what: one shared password, and everyone who has it sees all uploads.
+- Apart from the wait after a wrong password, nothing limits how fast the app can be used. A credit limit on the OpenRouter key is the safety net.
+- Documents can't be deleted in the app, and nothing deletes them after a time.
+- Text printed on a document is given to the AI as data. The chat's rules limit what it can do, but nothing looks for a document that tries to give the AI instructions.
+
+---
+
 ## AI development tools used
 
-- **Claude Code** using **Claude Opus 5**. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.
+- **Claude Code**, using **Claude Opus 5** and **Claude Fable 5.1**. It was used to write the code, tests and Dockerfile, run the model comparison, and check each step in a browser.
