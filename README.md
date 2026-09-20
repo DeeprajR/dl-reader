@@ -262,7 +262,7 @@ If other people can reach the app, set `APP_PASSWORD`. The browser then asks for
 
 #### Google Cloud Run (free)
 
-The app is deployed on Google Cloud Run. It runs the same Docker image, sleeps when nobody uses it, and its monthly free allowance covers about 50 hours of active use at 2 GB of memory. The first visit after a sleep takes about 30 seconds. Uploads are kept in memory, so they are gone when the app sleeps.
+The app is deployed on Google Cloud Run. It runs the same Docker image, sleeps when nobody uses it, and its monthly free allowance covers about 50 hours of active use at 2 GB of memory. The first visit after a sleep takes about 30 seconds. Uploads and the database are kept in a Cloud Storage bucket (5 GB are free), so the document list is still there after a sleep.
 
 You need a Google Cloud project with billing enabled (a card is required, even for free use), the [gcloud tool](https://cloud.google.com/sdk/docs/install) (`winget install Google.CloudSDK` on Windows), and Docker running. Replace `PROJECT` with your project ID. On Windows, run these in Git Bash.
 
@@ -287,14 +287,30 @@ for s in openrouter-api-key app-password; do
     --member=serviceAccount:NUMBER-compute@developer.gserviceaccount.com
 done
 
-# 4. Deploy
+# 4. Create a private storage bucket for the uploads, and let Cloud Run use it
+gcloud storage buckets create gs://PROJECT-licence-reader-data --location=us-central1 \
+  --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets add-iam-policy-binding gs://PROJECT-licence-reader-data --role=roles/storage.objectUser \
+  --member=serviceAccount:NUMBER-compute@developer.gserviceaccount.com
+
+# 5. Deploy, with the bucket as the app's data folder
 gcloud run deploy licence-reader --region us-central1 --allow-unauthenticated \
   --image us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1 \
   --memory 2Gi --cpu 1 --cpu-boost --min-instances 0 --max-instances 1 --timeout 300 \
-  --set-secrets OPENROUTER_API_KEY=openrouter-api-key:latest,APP_PASSWORD=app-password:latest
+  --set-secrets OPENROUTER_API_KEY=openrouter-api-key:latest,APP_PASSWORD=app-password:latest \
+  --execution-environment gen2 \
+  --add-volume "name=data,type=cloud-storage,bucket=PROJECT-licence-reader-data,mount-options=uid=1000;gid=1000" \
+  --add-volume-mount volume=data,mount-path=/app/backend/data
 ```
 
-The last command prints the app's link. `--allow-unauthenticated` only lets visitors reach the app; its own password still protects it. `--max-instances 1` keeps all documents in one place and caps the cost. To be safe, also set a budget alert in Google Cloud and a credit limit on the OpenRouter key.
+On Windows, run step 5 in PowerShell with the command on one line: Git Bash rewrites `/app/backend/data` into a Windows path.
+
+The last command prints the app's link.
+
+- `--allow-unauthenticated` only lets visitors reach the app; its own password still protects it.
+- `--max-instances 1` caps the cost. It is also required: the database file lives in the bucket, and only one running copy of the app may write to it.
+- The bucket holds the uploads and the database, so the document list survives sleeps and new versions. The chat's search index is not stored: it is rebuilt from the saved data the first time a document is asked about, which makes that first answer slower.
+- To be safe, set a budget alert in Google Cloud and a credit limit on the OpenRouter key.
 
 ---
 
@@ -387,7 +403,8 @@ Any OpenRouter model that accepts images can be used by changing `LLM_MODEL`. Th
 - **No chat memory.** The chat answers each question on its own, without remembering earlier ones.
 - **Reading time.** Reading a licence takes about 8–15 seconds with the default model.
 - **No user accounts.** The app is open unless `APP_PASSWORD` is set, and that is one shared password: everyone who has it sees all uploads.
-- **No long-term storage with Docker.** Documents are kept inside the container, so each `docker run` starts with an empty list. When run directly on your computer, they stay in `backend/data` and `backend/chroma`.
+- **No long-term storage with Docker.** Documents are kept inside the container, so each `docker run` starts with an empty list. When run directly on your computer, they stay in `backend/data` and `backend/chroma`. On Cloud Run they are kept in a storage bucket.
+- **Documents can't be deleted in the app.** There is no delete button. Locally, delete the `backend/data` and `backend/chroma` folders; on Cloud Run, empty the bucket.
 
 ---
 
