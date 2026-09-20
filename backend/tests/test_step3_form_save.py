@@ -67,6 +67,17 @@ def test_save_rejects_bad_other_field_names_and_shapes(client, extracted):
     assert response.json()["error"].startswith("Invalid request")
 
 
+def test_dates_are_shown_day_first_and_stored_as_iso(client, extracted):
+    """The form shows and accepts DD-MM-YYYY; the backend stores YYYY-MM-DD, so the date checks and the chat keep working."""
+    data = saved_data(client, extracted)
+    data["date_of_expiry"]["value"] = "15-06-2034"  # as the form sends it
+    assert client.put(f"/api/documents/{extracted}/data", json=data).json()["date_of_expiry"]["value"] == "2034-06-15"
+
+    form = read("src/components/ExtractedForm.jsx")
+    assert "showDates(result.data)" in form and "showDates(result)" in form and "'DD-MM-YYYY'" in form
+    assert "'YYYY-MM-DD'" not in form  # the old placeholder
+
+
 def test_save_keeps_printed_labels_of_other_fields_only(client, extracted):
     """A printed label is saved (tidied) with an item of other_fields, dropped from a core field, and limited in length."""
     data = saved_data(client, extracted)

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { useToast } from './Toast.jsx'
 import ErrorMessage from './ErrorMessage.jsx'
-import { CORE_FIELDS, OTHER_FIELD, composeOther, fieldDomId, otherItems, parseOther } from '../fields.js'
+import { CORE_FIELDS, OTHER_FIELD, composeOther, fieldDomId, otherItems, parseOther, showDates, showDatesInText } from '../fields.js'
 
 // Progress text while POST /extract runs (a single request, so stages are time-based).
 const STAGES = [
@@ -60,7 +60,7 @@ function Field({ id, label, kind, field, active, onChange, onFocus }) {
         onFocus={onFocus}
         onClick={onFocus}
         rows={kind === 'multiline' ? 3 : undefined}
-        placeholder={kind === 'date' ? 'YYYY-MM-DD' : field.value == null ? 'Not found on the document' : ''}
+        placeholder={kind === 'date' ? 'DD-MM-YYYY' : field.value == null ? 'Not found on the document' : ''}
         aria-describedby={`${review ? `${id}-hint ` : ''}${id}-source`}
         className={`mt-1 block w-full rounded-md border px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 ${
           active && locatable ? 'ring-2 ring-blue-300 ' : ''
@@ -186,9 +186,10 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
   const apply = useCallback((result) => {
     if (!mounted.current) return
     setWarnings(result.warnings)
-    setForm(result.data)
-    setSaved(result.data)
-    setOtherText(composeOther(result.data.other_fields))
+    const data = showDates(result.data) // dates are shown day first
+    setForm(data)
+    setSaved(data)
+    setOtherText(composeOther(data.other_fields))
     setStatus('ready')
   }, [])
 
@@ -262,8 +263,10 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
     e.preventDefault()
     setSaving(true)
     try {
-      const data = await api.saveData(docId, { ...form, other_fields: parseOther(otherText, saved.other_fields) })
-      // The server returns the tidied data (trimmed, dates normalised), and that is what is shown.
+      // Dates go to the server as typed (day first); it stores them as YYYY-MM-DD.
+      const result = await api.saveData(docId, { ...form, other_fields: parseOther(otherText, saved.other_fields) })
+      // The server returns the tidied data (trimmed, dates checked), and that is what is shown.
+      const data = showDates(result)
       setForm(data)
       setSaved(data)
       setOtherText(composeOther(data.other_fields))
@@ -307,7 +310,7 @@ export default function ExtractedForm({ docId, activeField, onFieldFocus, onBoxe
         {warnings.length > 0 && (
           <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
             {warnings.map((w) => (
-              <p key={w}>{w}</p>
+              <p key={w}>{showDatesInText(w)}</p>
             ))}
           </div>
         )}

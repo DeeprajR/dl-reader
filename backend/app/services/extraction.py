@@ -454,7 +454,7 @@ def clean_user_data(data: LicenceData) -> LicenceData:
         if value and (name in DATE_FIELDS or class_date_key(name)):
             iso = normalize_date(value)
             if iso is None:
-                raise ValueError(f"{name} must be a valid date in YYYY-MM-DD format")
+                raise ValueError(f"{name} must be a valid date, for example 15-06-2034")
             value = iso
         field.value = value
         # Only an item of other_fields that has a value keeps its printed label.
