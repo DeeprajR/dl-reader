@@ -267,54 +267,6 @@ If other people can reach the app, set `APP_PASSWORD`. The app then shows a sign
 
 The app is deployed on Google Cloud Run. It runs the same Docker image, sleeps when nobody uses it, and its monthly free allowance covers about 50 hours of active use at 2 GB of memory. The first visit after a sleep takes about 30 seconds. Uploads and the database are kept in a Cloud Storage bucket (5 GB are free), so the document list is still there after a sleep.
 
-You need a Google Cloud project with billing enabled (a card is required, even for free use), the [gcloud tool](https://cloud.google.com/sdk/docs/install) (`winget install Google.CloudSDK` on Windows), and Docker running. Replace `PROJECT` with your project ID. On Windows, run these in Git Bash.
-
-```bash
-gcloud auth login
-gcloud config set project PROJECT
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com storage.googleapis.com
-
-# 1. Upload the image
-gcloud artifacts repositories create licence-reader --repository-format=docker --location=us-central1
-gcloud auth configure-docker us-central1-docker.pkg.dev
-docker build -t us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1 .
-docker push us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1
-
-# 2. Store the key and the password as secrets (printf adds no line break at the end)
-printf 'YOUR_OPENROUTER_KEY' | gcloud secrets create openrouter-api-key --data-file=-
-printf 'A_LONG_PASSWORD' | gcloud secrets create app-password --data-file=-
-
-# 3. Let Cloud Run read them. NUMBER is your project number: gcloud projects describe PROJECT
-for s in openrouter-api-key app-password; do
-  gcloud secrets add-iam-policy-binding $s --role=roles/secretmanager.secretAccessor \
-    --member=serviceAccount:NUMBER-compute@developer.gserviceaccount.com
-done
-
-# 4. Create a private storage bucket for the uploads, and let Cloud Run use it
-gcloud storage buckets create gs://PROJECT-licence-reader-data --location=us-central1 \
-  --uniform-bucket-level-access --public-access-prevention
-gcloud storage buckets add-iam-policy-binding gs://PROJECT-licence-reader-data --role=roles/storage.objectUser \
-  --member=serviceAccount:NUMBER-compute@developer.gserviceaccount.com
-
-# 5. Deploy, with the bucket as the app's data folder
-gcloud run deploy licence-reader --region us-central1 --allow-unauthenticated \
-  --image us-central1-docker.pkg.dev/PROJECT/licence-reader/app:v1 \
-  --memory 2Gi --cpu 1 --cpu-boost --min-instances 0 --max-instances 1 --timeout 300 \
-  --set-secrets OPENROUTER_API_KEY=openrouter-api-key:latest,APP_PASSWORD=app-password:latest \
-  --execution-environment gen2 \
-  --add-volume "name=data,type=cloud-storage,bucket=PROJECT-licence-reader-data,mount-options=uid=1000;gid=1000" \
-  --add-volume-mount volume=data,mount-path=/app/backend/data
-```
-
-On Windows, run step 5 in PowerShell with the command on one line: Git Bash rewrites `/app/backend/data` into a Windows path.
-
-The last command prints the app's link.
-
-- `--allow-unauthenticated` only lets visitors reach the app; its own password still protects it.
-- `--max-instances 1` caps the cost. It is also required: the database file lives in the bucket, and only one running copy of the app may write to it.
-- The bucket holds the uploads and the database, so the document list survives sleeps and new versions. The chat's search index is not stored: it is rebuilt from the saved data the first time a document is asked about, which makes that first answer slower.
-- To be safe, set a budget alert in Google Cloud and a credit limit on the OpenRouter key.
-
 #### What it costs
 
 The AI model is the main cost, about half a US cent per licence. Google's hosting is free at demo use. These figures are estimates from list prices, not bills.
